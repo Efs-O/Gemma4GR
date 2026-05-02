@@ -1,0 +1,38 @@
+# Secrets
+.env
+
+# Large binary assets (staged locally, never committed)
+assets/gguf/
+assets/piper/
+assets/voices/
+
+# Generated data (GB of audio files)
+data/raw_audio/
+data/resampled_audio/
+data/piper_audio/
+data/piper_dataset/
+
+# Downloaded models
+models/
+
+# Training outputs
+output/
+
+# Logs
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db

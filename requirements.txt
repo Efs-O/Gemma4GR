@@ -1,0 +1,35 @@
+# Core
+torch>=2.1.0
+transformers>=4.50.0
+datasets>=2.18.0
+trl>=0.8.0
+peft>=0.10.0
+bitsandbytes>=0.43.0
+accelerate>=0.27.0
+
+# Unsloth (install separately — see README)
+# pip install unsloth[colab-new]  (Colab / Linux)
+# pip install unsloth             (Windows local)
+
+# Moira / Orpheus TTS
+snac>=1.0.0
+soundfile>=0.12.0
+librosa>=0.10.0
+scipy>=1.11.0
+
+# Audio processing
+torchcodec>=0.1.0
+
+# Dataset & utilities
+huggingface_hub>=0.21.0
+python-dotenv>=1.0.0
+tqdm>=4.66.0
+
+# UI
+rich>=13.7.0
+
+# Evaluation
+jiwer>=3.0.0
+
+# Notebook (Colab only)
+ipywidgets>=8.0.0
