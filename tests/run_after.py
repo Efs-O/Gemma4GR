@@ -1,17 +1,24 @@
 """
 Step A — Run benchmarks on the FINE-TUNED model (after training).
-Loads the trained E2B GGUF and runs the same benchmark suite.
+Loads the final merged GGUF when available and runs the same benchmark suite.
 """
 import os, sys, subprocess, time, requests
 from pathlib import Path
 from dotenv import load_dotenv
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 load_dotenv()
 
 BASE       = Path(__file__).parent.parent
 LLAMA_PORT = int(os.getenv("LLAMA_SERVER_PORT", "8080"))
+LLAMA_SERVER_EXE = os.getenv("LLAMA_SERVER_EXE", "")
 
 # Fine-tuned GGUF
+MERGED_DIR  = BASE / "output" / "merged_gguf"
 GGUF_E2B_FT = BASE / "output" / "e2b_greek_stt" / "gguf" / "gemma-4-E2B-it-Q4_K_M.gguf"
 GGUF_E4B_FT = BASE / "output" / "e4b_greek_stt" / "gguf" / "gemma-4-E4B-it-Q4_K_M.gguf"
 
@@ -24,13 +31,23 @@ from stt_benchmark  import run_stt_benchmark
 
 
 def find_llama_server() -> Path | None:
+    if LLAMA_SERVER_EXE:
+        explicit = Path(LLAMA_SERVER_EXE)
+        if explicit.exists():
+            return explicit
     if LLAMA_EXE.exists():
         return LLAMA_EXE
+    fallback = Path(r"C:\Program Files (x86)\Llamacpp\llama.cpp-b8929\llama-server.exe")
+    if fallback.exists():
+        return fallback
     return None
 
 
 def pick_model() -> tuple[Path, str]:
     """Pick whichever fine-tuned model is available."""
+    merged_q4 = next((f for f in MERGED_DIR.glob("*.gguf") if "q4" in f.name.lower()), None)
+    if merged_q4:
+        return merged_q4, "finetuned"
     if GGUF_E4B_FT.exists():
         return GGUF_E4B_FT, "finetuned_e4b"
     if GGUF_E2B_FT.exists():

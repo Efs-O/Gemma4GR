@@ -7,10 +7,16 @@ import os, sys, subprocess, time, requests
 from pathlib import Path
 from dotenv import load_dotenv
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 load_dotenv()
 
 BASE       = Path(__file__).parent.parent
 LLAMA_PORT = int(os.getenv("LLAMA_SERVER_PORT", "8080"))
+LLAMA_SERVER_EXE = os.getenv("LLAMA_SERVER_EXE", "")
 
 # Base model GGUF (before fine-tuning)
 GGUF_E2B = BASE / "assets" / "gguf" / "gemma-4-E2B-it-Q4_K_M.gguf"
@@ -27,12 +33,14 @@ from stt_benchmark  import run_stt_benchmark
 
 def find_llama_server() -> Path | None:
     candidates = [
+        Path(LLAMA_SERVER_EXE) if LLAMA_SERVER_EXE else None,
         LLAMA_EXE,
         Path(r"C:\Users\efso office\Desktop\Gemma4Kids\piper\llama-server.exe"),
+        Path(r"C:\Program Files (x86)\Llamacpp\llama.cpp-b8929\llama-server.exe"),
         Path(r"C:\llama.cpp\llama-server.exe"),
     ]
     for c in candidates:
-        if c.exists():
+        if c and c.exists():
             return c
     return None
 
