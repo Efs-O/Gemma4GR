@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import traceback
 from pathlib import Path
@@ -197,6 +198,22 @@ def write_modelfile(gguf_files: list[Path]) -> None:
     print(f"  Modelfile written: {modelfile_path}")
 
 
+def copy_generated_files(file_paths: list[str]) -> list[Path]:
+    copied: list[Path] = []
+    prepare_output_dir(GGUF_DIR)
+
+    for file_path_str in file_paths:
+        source = Path(file_path_str)
+        if not source.exists():
+            continue
+        destination = GGUF_DIR / source.name
+        if source.resolve() != destination.resolve():
+            shutil.copy2(source, destination)
+        copied.append(destination)
+
+    return copied
+
+
 def export_gguf(model, tokenizer) -> tuple[bool, list[str], str | None]:
     if not EXPORT_GGUF:
         print("\n[4/4] Skipping GGUF export by configuration.")
@@ -212,19 +229,33 @@ def export_gguf(model, tokenizer) -> tuple[bool, list[str], str | None]:
 
     try:
         if GGUF_QUANT_METHODS:
-            model.save_pretrained_gguf(
+            result = model.save_pretrained_gguf(
                 str(GGUF_DIR),
                 tokenizer,
                 quantization_method=GGUF_QUANT_METHODS,
             )
         else:
-            model.save_pretrained_gguf(str(GGUF_DIR), tokenizer)
+            result = model.save_pretrained_gguf(str(GGUF_DIR), tokenizer)
     except Exception as exc:
         print(f"  [WARN] GGUF export failed: {exc}")
         return False, [], "".join(traceback.format_exception_only(type(exc), exc)).strip()
 
-    gguf_files = sorted(GGUF_DIR.glob("*.gguf"))
-    write_modelfile(gguf_files)
+    generated_files: list[str] = []
+    modelfile_location = None
+    if isinstance(result, dict):
+        generated_files = [str(path) for path in result.get("gguf_files", [])]
+        modelfile_location = result.get("modelfile_location")
+
+    copied_files = copy_generated_files(generated_files)
+    gguf_files = sorted(path for path in copied_files if path.suffix.lower() == ".gguf")
+
+    if modelfile_location:
+        source_modelfile = Path(modelfile_location)
+        if source_modelfile.exists():
+            shutil.copy2(source_modelfile, GGUF_DIR / source_modelfile.name)
+    else:
+        write_modelfile(gguf_files)
+
     return bool(gguf_files), [f.name for f in gguf_files], None
 
 
