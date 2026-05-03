@@ -11,6 +11,8 @@ data/raw_audio/
 data/resampled_audio/
 data/piper_audio/
 data/piper_dataset/
+data/moira_english_named/
+data/orpheus_only_english/
 
 # Downloaded models
 models/

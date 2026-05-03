@@ -20,9 +20,29 @@ RAW_DIR     = BASE / "data" / "raw_audio"
 STT_DIR     = BASE / "data" / "resampled_audio"
 PIPER_DIR   = BASE / "data" / "piper_audio"
 TXT_DIR     = BASE / "data" / "transcripts"
-ORPHEUS_DIR = BASE / "models" / "orpheus"
+_ORPHEUS_OVERRIDE = os.getenv("ORPHEUS_MODEL_DIR", "").strip()
+ORPHEUS_DIR = Path(_ORPHEUS_OVERRIDE) if _ORPHEUS_OVERRIDE else BASE / "models" / "orpheus"
 MOIRA_DIR   = BASE / "models" / "moira"
 NUM_PAIRS   = int(os.getenv("NUM_PAIRS", "3000"))
+
+
+def use_moira_lora() -> bool:
+    v = os.getenv("USE_MOIRA_LORA", "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
+def moira_adapter_path() -> Path:
+    """PEFT files may live under models/moira/checkpoint-*/ after snapshot_download."""
+    override = os.getenv("MOIRA_ADAPTER_DIR", "").strip()
+    if override:
+        return Path(override)
+    if (MOIRA_DIR / "adapter_config.json").exists():
+        return MOIRA_DIR
+    for ckpt in sorted(MOIRA_DIR.glob("checkpoint-*"), key=lambda p: p.name, reverse=True):
+        if (ckpt / "adapter_config.json").exists():
+            return ckpt
+    return MOIRA_DIR
+
 
 for d in [RAW_DIR, STT_DIR, PIPER_DIR, TXT_DIR]:
     d.mkdir(parents=True, exist_ok=True)
@@ -217,8 +237,12 @@ def load_moira():
         dtype=None,
         load_in_4bit=False,
     )
-    print("  Loading Moira LoRA adapters ...")
-    model.load_adapter(str(MOIRA_DIR))
+    if use_moira_lora():
+        adapter_dir = moira_adapter_path()
+        print("  Loading Moira LoRA adapters ...")
+        model.load_adapter(str(adapter_dir))
+    else:
+        print("  Skipping Moira LoRA (Orpheus base only; USE_MOIRA_LORA=0).")
     FastLanguageModel.for_inference(model)
 
     tokenizer = AutoTokenizer.from_pretrained(str(ORPHEUS_DIR))
@@ -308,6 +332,10 @@ def resample(audio: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
 def main():
     print("=" * 55)
     print("  Gemma4GR — Generate Greek Audio Pairs")
+    if use_moira_lora():
+        print(f"  Mode: Orpheus + Moira — adapters {moira_adapter_path()}")
+    else:
+        print("  Mode: Orpheus base only (USE_MOIRA_LORA=0)")
     print(f"  Target: {NUM_PAIRS} pairs")
     print("=" * 55)
 
