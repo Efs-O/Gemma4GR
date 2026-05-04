@@ -13,9 +13,12 @@ data/piper_audio/
 data/piper_dataset/
 data/moira_english_named/
 data/orpheus_only_english/
+data/css10_greek/
+data/moira_original_greektts_sample/
 
 # Downloaded models
 models/
+original moira/
 
 # Training outputs
 output/

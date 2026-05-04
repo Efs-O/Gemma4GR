@@ -1,0 +1,41 @@
+FROM nvcr.io/nvidia/pytorch:25.01-py3
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    cmake build-essential pkg-config ca-certificates curl git \
+    espeak-ng libespeak-ng-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build piper-phonemize (CMake downloads ONNX Runtime + ExternalProject builds espeak-ng)
+COPY models/piper-phonemize /app/piper-phonemize-src
+WORKDIR /app/piper-phonemize-src
+ARG ONNXRUNTIME_VERSION=1.14.1
+RUN cmake -Bbuild -DCMAKE_INSTALL_PREFIX=install \
+    && cmake --build build --config Release \
+    && cmake --install build
+
+# setup.py expects lib/Linux-<arch>/onnxruntime and espeak-ng/build; MANIFEST expects
+# piper_phonemize/libtashkeel_model.ort and piper_phonemize/espeak-ng-data/.
+RUN set -eux; \
+    ONNX_PRE="onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}"; \
+    test -d "lib/${ONNX_PRE}"; \
+    mkdir -p lib/Linux-x86_64 espeak-ng; \
+    ln -sfn "../${ONNX_PRE}" "lib/Linux-x86_64/onnxruntime"; \
+    ln -sfn ../build/ei espeak-ng/build; \
+    cp -f etc/libtashkeel_model.ort piper_phonemize/libtashkeel_model.ort; \
+    rm -rf piper_phonemize/espeak-ng-data; \
+    cp -a build/ei/share/espeak-ng-data piper_phonemize/espeak-ng-data
+
+WORKDIR /app
+COPY models/piper-src/src/python /app/piper-train-src
+RUN pip install --no-deps /app/piper-train-src \
+    && pip install \
+        'pytorch-lightning>=2,<3' \
+        'librosa>=0.9.2,<1' \
+        numpy \
+        onnxruntime \
+        'cython>=0.29.0,<1' \
+    && pip install /app/piper-phonemize-src
+
+WORKDIR /app

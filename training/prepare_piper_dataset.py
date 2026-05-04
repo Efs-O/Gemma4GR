@@ -4,7 +4,7 @@ Input:  data/piper_audio/*.wav   (22050 Hz mono)
         data/transcripts/*.txt
 Output: data/piper_dataset/
           wavs/*.wav
-          metadata.csv           (wav_name|text|text)
+          metadata.csv           (wav_name|text)
 """
 import shutil, os
 from pathlib import Path
@@ -58,9 +58,9 @@ def build():
         if not dst.exists():
             shutil.copy2(wav, dst)
 
-        # LJSpeech format: filename (no ext) | text | text
+        # Piper single-speaker LJSpeech format: id|text
         stem = wav.stem
-        lines.append(f"{stem}|{text}|{text}")
+        lines.append(f"{stem}|{text}")
 
     meta_path = OUT_DIR / "metadata.csv"
     with open(meta_path, "w", encoding="utf-8") as f:
@@ -73,6 +73,10 @@ def build():
     print(f"  Manifest:{meta_path}")
     print(f"\n  Minimum recommended for good voice: 3,000 entries")
     print(f"  Current count: {len(lines)}")
+    if lines:
+        print("\n  Sample manifest rows:")
+        for line in lines[:5]:
+            print(f"    {line[:140]}")
 
 
 if __name__ == "__main__":

@@ -347,7 +347,7 @@ def main():
     print(f"\n  Already done: {len(done)} | Remaining: {len(remaining)}")
 
     if not remaining:
-        print("\n✓ All pairs already generated.")
+        print("\nOK: All pairs already generated.")
         return
 
     print("\n  Loading Moira TTS model (Orpheus + SNAC) ...")
@@ -381,7 +381,7 @@ def main():
             failed += 1
 
     total = len(done) + len(remaining) - failed
-    print(f"\n✓ Generation complete.")
+    print(f"\nOK: Generation complete.")
     print(f"  Total pairs: {total} | Failed: {failed}")
     print(f"  RAW (24kHz):   {RAW_DIR}")
     print(f"  STT (16kHz):   {STT_DIR}")

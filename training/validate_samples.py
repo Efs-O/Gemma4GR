@@ -18,6 +18,14 @@ SAMPLE_COUNT = int(os.getenv("SAMPLE_COUNT", "5"))
 VALIDATION_STATUS = BASE / "logs" / "validation_status.json"
 
 
+def _piper_dataset_dir() -> Path:
+    raw = os.getenv("PIPER_DATASET_DIR", "").strip()
+    if not raw:
+        return (BASE / "data" / "piper_dataset").resolve()
+    candidate = Path(raw).expanduser()
+    return candidate.resolve() if candidate.is_absolute() else (BASE / candidate).resolve()
+
+
 def show_stt_samples() -> None:
     print("\n[STT samples]")
     audio_dir = BASE / "data" / "resampled_audio"
@@ -34,9 +42,11 @@ def show_stt_samples() -> None:
 
 
 def show_piper_samples() -> None:
+    ds = _piper_dataset_dir()
     print("\n[Piper samples]")
-    meta = BASE / "data" / "piper_dataset" / "metadata.csv"
-    wav_dir = BASE / "data" / "piper_dataset" / "wavs"
+    print(f"  Dataset dir: {ds}")
+    meta = ds / "metadata.csv"
+    wav_dir = ds / "wavs"
     if not meta.exists():
         print("  No Piper metadata found.")
         return
@@ -80,10 +90,11 @@ def show_qa_samples() -> None:
 
 def write_validation_status() -> None:
     VALIDATION_STATUS.parent.mkdir(parents=True, exist_ok=True)
+    piper_meta = _piper_dataset_dir() / "metadata.csv"
     tracked = [
         BASE / "data" / "train_stt.jsonl",
         BASE / "data" / "train_stt_val.jsonl",
-        BASE / "data" / "piper_dataset" / "metadata.csv",
+        piper_meta,
         BASE / "data" / "qa_preview.jsonl",
         BASE / "data" / "qa_pairs.jsonl",
         BASE / "data" / "qa_pairs_deduped.jsonl",

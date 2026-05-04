@@ -9,6 +9,7 @@ Output: data/qa_pairs.jsonl
 
 Supports resume: skips pairs already written to output file.
 Target: NUM_QA pairs (default 1500, configurable via env).
+Balanced seed pool: 8 categories × 10 seeds = 80 distinct seed questions (follow-ups fill toward NUM_QA).
 """
 import os, sys, json, time, random
 from pathlib import Path
@@ -25,7 +26,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 OLLAMA_URL    = os.getenv("OLLAMA_URL", "http://localhost:11434")
 TEACHER_MODEL = os.getenv("TEACHER_MODEL", "qwen3.5:397b-cloud")
 NUM_QA        = int(os.getenv("NUM_QA", "1500"))
-TEMPERATURE   = float(os.getenv("QA_TEMPERATURE", "0.8"))
+TEMPERATURE   = float(os.getenv("QA_TEMPERATURE", "0.65"))
 MAX_RETRIES   = 3
 
 # ── Q&A topic categories with seeds ─────────────────────────────────────────
@@ -126,7 +127,61 @@ CATEGORIES = {
         "Τι παίζουν τα παιδιά στην Ελλάδα;",
         "Πώς λέμε 'καλημέρα' και 'καληνύχτα' στα ελληνικά;",
     ],
+    "mythology": [
+        "Ποιος ήταν ο Δίας στην ελληνική μυθολογία;",
+        "Τι είναι ο Όλυμπος και ποιοι θεοί κατοικούσαν εκεί;",
+        "Ποιος ήταν ο Ηρακλής και ποιοι ήταν οι Άθλοι του;",
+        "Τι λέει ο μύθος του Προμηθέα;",
+        "Ποια ήταν η Αφροδίτη στην αρχαία ελληνική μυθολογία;",
+        "Τι είναι η Οδύσσεια και ποιος ήταν ο Οδυσσέας;",
+        "Ποιος ήταν ο Αχιλλέας και ποια η ιστορία του;",
+        "Τι ήταν ο Δούρειος Ίππος;",
+        "Ποιος ήταν ο Ποσειδώνας;",
+        "Τι λέει ο μύθος του Ικάρου και του Δαίδαλου;",
+    ],
+    "religion_orthodox": [
+        "Τι είναι η Ορθόδοξη Εκκλησία στην Ελλάδα;",
+        "Πώς γιορτάζεται η Ανάσταση στην Ελλάδα;",
+        "Τι είναι το Άγιο Πνεύμα στην Ορθόδοξη παράδοση;",
+        "Ποια είναι η σημασία της Σαρακοστής για τους Έλληνες;",
+        "Τι είναι τα ονομαστήρια και πώς τα γιορτάζουν οι Έλληνες;",
+        "Ποιος ήταν ο Άγιος Νικόλαος και γιατί τιμάται στην Ελλάδα;",
+        "Τι ρόλο παίζει η εκκλησία στην ελληνική κοινωνία;",
+        "Πώς βαφτίζονται τα παιδιά στην Ελλάδα;",
+        "Τι είναι το Άγιον Όρος;",
+        "Πώς γιορτάζουν τα Χριστούγεννα οι Έλληνες;",
+    ],
 }
+
+# Greek phrases for follow-up questions (με/για + accusative), not English slugs
+CATEGORY_TOPIC_EL: dict[str, str] = {
+    "history": "την ιστορία",
+    "culture": "την κουλτούρα",
+    "geography": "τη γεωγραφία",
+    "language": "τη γλώσσα",
+    "science": "την επιστήμη",
+    "everyday": "την καθημερινότητα",
+    "food": "τη διατροφή",
+    "children_education": "την εκπαίδευση των παιδιών",
+    "mythology": "την ελληνική μυθολογία",
+    "religion_orthodox": "την Ορθόδοξη παράδοση",
+}
+
+
+def category_topic_el(category: str) -> str:
+    return CATEGORY_TOPIC_EL.get(category, category)
+
+
+def text_contains_english_category_slug(text: str) -> bool:
+    """True if internal English category ids appear in user-visible text (should never ship)."""
+    if not text:
+        return False
+    low = text.lower()
+    for slug in CATEGORIES:
+        if slug in low:
+            return True
+    return False
+
 
 SYSTEM_PROMPT = """Είσαι ένας ειδικός εκπαιδευτής ελληνικής γλώσσας και πολιτισμού.
 Δημιουργείς ερωτήσεις και απαντήσεις στα ελληνικά.
@@ -145,13 +200,26 @@ def check_ollama() -> bool:
         with request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read())
         models = [m["name"] for m in data.get("models", [])]
-        if not models:
-            print(f"  [WARN] Ollama running but no models found.")
+        if not models and not TEACHER_MODEL.endswith("-cloud"):
+            print("  [WARN] Ollama running but no models in tags (need local pull or a *-cloud teacher).")
             return False
-        print(f"  Ollama OK. Available models: {', '.join(models[:5])}")
+        tag_preview = ", ".join(models[:5])
+        if len(models) > 5:
+            tag_preview += ", …"
+        print(f"  Ollama OK. Local tags (sample): {tag_preview or '—'}")
+
+        if TEACHER_MODEL.endswith("-cloud"):
+            print(
+                f"  [INFO] Teacher '{TEACHER_MODEL}' is an Ollama cloud model"
+                " (not listed in local tags). Ensure Ollama cloud is signed in if required."
+            )
+            return True
+
+        if TEACHER_MODEL in models:
+            return True
         if not any(TEACHER_MODEL.split(":")[0] in m for m in models):
             print(f"  [WARN] '{TEACHER_MODEL}' not found. Available: {models}")
-            print(f"  To pull: ollama pull {TEACHER_MODEL}")
+            print(f"  To pull a local model: ollama pull <tag>. For cloud: set TEACHER_MODEL=e.g. qwen3.5:397b-cloud")
             return False
         return True
     except Exception as e:
@@ -190,8 +258,9 @@ def ollama_generate(prompt: str, system: str) -> str | None:
 
 
 def make_prompt(question: str, category: str) -> str:
+    topic = category_topic_el(category)
     return (
-        f"Κατηγορία: {category}\n\n"
+        f"Κατηγορία: {topic}\n\n"
         f"Ερώτηση: {question}\n\n"
         f"Γράψε μια λεπτομερή, σωστή απάντηση στα ελληνικά (3-6 προτάσεις). "
         f"Ξεκίνα απευθείας με την απάντηση χωρίς εισαγωγή."
@@ -200,12 +269,26 @@ def make_prompt(question: str, category: str) -> str:
 
 def generate_followup_question(category: str, existing: str) -> str:
     """Generate a follow-up question based on category to expand the dataset."""
+    topic = category_topic_el(category)
+    snippet = existing.strip()
+    if len(snippet) > 40:
+        snippet = snippet[:37].rsplit(" ", 1)[0] + "…"
     templates = [
-        f"Ποια είναι τα κυριότερα χαρακτηριστικά που σχετίζονται με {category} στην Ελλάδα;",
-        f"Τι άλλο είναι σημαντικό να γνωρίζουμε για {category} στην ελληνική παράδοση;",
-        f"Πώς επηρεάζει το θέμα '{existing[:30]}...' την ελληνική κοινωνία σήμερα;",
-        f"Ποια είναι η ιστορική σημασία που σχετίζεται με {category} στην Ελλάδα;",
-        f"Τι διαφορές υπάρχουν μεταξύ παλιάς και σύγχρονης Ελλάδας σχετικά με {category};",
+        f"Ποια είναι τα κυριότερα χαρακτηριστικά που σχετίζονται με {topic} στην Ελλάδα;",
+        f"Τι άλλο είναι σημαντικό να γνωρίζουμε για {topic} στην ελληνική παράδοση;",
+        f"Πώς επηρεάζει το θέμα «{snippet}» την ελληνική κοινωνία σήμερα;",
+        f"Ποια είναι η ιστορική σημασία που σχετίζεται με {topic} στην Ελλάδα;",
+        f"Τι διαφορές υπάρχουν μεταξύ παλιάς και σύγχρονης Ελλάδας σχετικά με {topic};",
+        f"Πώς διδάσκεται στα ελληνικά σχολεία το θέμα της {topic};",
+        f"Ποιοι διάσημοι Έλληνες συνέβαλαν στον τομέα της {topic};",
+        f"Τι μπορεί να μάθει ένας ξένος για την Ελλάδα μέσα από {topic};",
+        f"Πώς εξελίχθηκε με τον καιρό η ελληνική {topic};",
+        f"Ποιες είναι οι παγκόσμιες επιρροές της ελληνικής {topic};",
+        f"Πώς βιώνουν οι σύγχρονοι Έλληνες το θέμα της {topic} στην καθημερινότητά τους;",
+        f"Τι ρόλο παίζει {topic} στη διαμόρφωση της ελληνικής ταυτότητας;",
+        f"Ποια στοιχεία της {topic} κληροδοτήθηκαν από την αρχαιότητα ως σήμερα;",
+        f"Πώς συνδέεται {topic} με άλλες πτυχές του ελληνικού πολιτισμού;",
+        f"Ποιες είναι οι σύγχρονες προκλήσεις που αντιμετωπίζει η ελληνική {topic};",
     ]
     return random.choice(templates)
 
@@ -271,16 +354,25 @@ def main():
         for i, (category, question) in enumerate(questions_to_do, 1):
             print(f"  [{i:4d}/{remaining}] [{category}] {question[:55]}...")
 
+            if text_contains_english_category_slug(question):
+                print("           [SKIP] Question contains English category slug (regenerate pool)")
+                failed += 1
+                continue
+
             answer = None
             for attempt in range(MAX_RETRIES):
                 answer = ollama_generate(make_prompt(question, category), SYSTEM_PROMPT)
-                if answer and len(answer) > 50:
+                if (
+                    answer
+                    and len(answer) > 50
+                    and not text_contains_english_category_slug(answer)
+                ):
                     break
                 if attempt < MAX_RETRIES - 1:
                     time.sleep(2)
 
-            if not answer or len(answer) < 50:
-                print(f"           [SKIP] Empty/short response after {MAX_RETRIES} tries")
+            if not answer or len(answer) < 50 or text_contains_english_category_slug(answer):
+                print(f"           [SKIP] Empty/short answer or English slug in answer after {MAX_RETRIES} tries")
                 failed += 1
                 continue
 

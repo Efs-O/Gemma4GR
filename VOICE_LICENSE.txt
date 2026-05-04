@@ -1,0 +1,28 @@
+JOY Greek Voice (el_GR-joy-medium.onnx)
+Gemma4GR Project — https://github.com/Efs-O/Gemma4GR
+
+Copyright (c) 2026 Gemma4GR Project
+
+This voice model and all associated recordings are licensed under the
+Creative Commons Attribution-NonCommercial 4.0 International License (CC BY-NC 4.0).
+
+You are free to:
+  Share  — copy and redistribute the material in any medium or format
+  Adapt  — remix, transform, and build upon the material
+
+Under the following terms:
+  Attribution    — You must give appropriate credit, provide a link to the license,
+                   and indicate if changes were made. Required attribution:
+                   "JOY Greek voice — Gemma4GR project, CC BY-NC 4.0"
+                   Link: https://github.com/Efs-O/Gemma4GR
+
+  NonCommercial  — You may not use the material for commercial purposes.
+                   Commercial use requires explicit written permission from the
+                   project author. Contact: amandoulou@yahoo.gr
+
+No additional restrictions — You may not apply legal terms or technological
+measures that legally restrict others from doing anything the license permits.
+
+Full license text: https://creativecommons.org/licenses/by-nc/4.0/legalcode
+
+The licensor offers no warranties with respect to this voice model.

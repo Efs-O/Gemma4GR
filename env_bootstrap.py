@@ -159,6 +159,7 @@ def ensure_unsloth_runtime(base_dir: Path) -> None:
 
 def select_python_for_script(base_dir: Path, script_path: Path) -> tuple[str, str | None]:
     unsloth_scripts = {
+        "generate_pairs.py",
         "train_e2b_local.py",
         "train_qa_local.py",
         "merge_adapters.py",

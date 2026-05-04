@@ -33,13 +33,14 @@ COLAB_STUDIO = "https://colab.research.google.com/github/unslothai/unsloth/blob/
 # Phase 1 — STT pipeline
 PHASE1_STEPS = [
     ("1", "Setup Assets",               "training/setup_assets.py",         "assets/piper/piper.exe"),
+    ("1p", "Setup Piper Sources (git)",  "training/setup_piper_sources.py",  "models/piper-src/.git"),
     ("2", "Download Moira Model",        "training/download_moira.py",       "models/moira/.downloaded"),
     ("3", "Generate Greek Audio Pairs",  "training/generate_pairs.py",       "data/raw_audio"),
     ("4", "Prepare STT Dataset",         "training/prepare_stt_dataset.py",  "data/train_stt.jsonl"),
     ("5", "Prepare Piper Dataset",       "training/prepare_piper_dataset.py","data/piper_dataset/metadata.csv"),
     ("6", "Benchmark BEFORE Training",   "tests/run_before.py",              "tests/benchmark_results/base_qa.json"),
     ("7", "Train E2B STT — Local GPU",   "training/train_e2b_local.py",      "output/e2b_greek_stt/lora_adapter"),
-    ("9", "Train Piper Voice (Docker)",  "training/train_piper.py",          "output/piper_voice/el_GR-gemma4gr-medium.onnx"),
+    ("9", "Train Piper Voice (Docker)",  "training/train_piper.py",          "output/piper_voice/el_GR-joy-medium.onnx"),
 ]
 
 # Phase 2 — Greek Q&A text pipeline
@@ -302,6 +303,7 @@ def main():
     dispatch = {
         # Phase 1 — STT
         "1":  lambda: run_script("training/setup_assets.py",          "setup"),
+        "1P": lambda: run_script("training/setup_piper_sources.py",  "setup_piper_sources"),
         "2":  lambda: run_script("training/download_moira.py",         "download_moira"),
         "3":  lambda: run_script("training/generate_pairs.py",         "generate_pairs"),
         "4":  lambda: run_script("training/prepare_stt_dataset.py",    "prepare_stt"),
