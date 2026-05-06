@@ -4,6 +4,7 @@ Target GPU: RTX 4060 Ti / 5060 Ti 16 GB
 VRAM usage: ~8-10 GB with QLoRA 4-bit
 Est. time: 2-4 hours for 3000 pairs x 3 epochs
 """
+import csv
 import json
 import os
 import sys
@@ -19,7 +20,7 @@ BASE = Path(__file__).parent.parent
 if str(BASE) not in sys.path:
     sys.path.insert(0, str(BASE))
 
-from env_bootstrap import ensure_unsloth_runtime
+from env_bootstrap import ensure_unsloth_runtime, resolve_hf_snapshot
 
 ensure_unsloth_runtime(BASE)
 
@@ -27,31 +28,84 @@ import torch
 from dotenv import load_dotenv
 
 load_dotenv()
-TRAIN_DATA = BASE / "data" / "train_stt.jsonl"
-VAL_DATA = BASE / "data" / "train_stt_val.jsonl"
+_train_data_raw = os.getenv("STT_TRAIN_DATA", "").strip()
+TRAIN_DATA = Path(_train_data_raw) if _train_data_raw else BASE / "data" / "train_stt.jsonl"
+if not TRAIN_DATA.is_absolute():
+    TRAIN_DATA = BASE / TRAIN_DATA
+_val_data_raw = os.getenv("STT_VAL_DATA", "").strip()
+VAL_DATA = Path(_val_data_raw) if _val_data_raw else BASE / "data" / "train_stt_val.jsonl"
+if not VAL_DATA.is_absolute():
+    VAL_DATA = BASE / VAL_DATA
 OUTPUT_DIR = BASE / "output" / "e2b_greek_stt"
 LOG_DIR = BASE / "logs"
 VALIDATION_STATUS = LOG_DIR / "validation_status.json"
 
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 MODEL_NAME = os.getenv("E2B_MODEL", "unsloth/gemma-4-E2B-it")
+MODEL_PATH_OVERRIDE = os.getenv("E2B_MODEL_PATH", "").strip()
 
-MAX_SEQ_LEN = 4096
-LORA_R = 64
-LORA_ALPHA = 128
-EPOCHS = 3
-BATCH_SIZE = 1
-GRAD_ACCUM = 4
-LR = 2e-4
-WARMUP_STEPS = 5
-LOGGING_STEPS = 1
-EVAL_STEPS = 100
-SAVE_STEPS = 500
+MAX_SEQ_LEN = int(os.getenv("STT_TRAIN_MAX_SEQ_LEN", "1024"))
+LORA_R = int(os.getenv("STT_TRAIN_LORA_R", "64"))
+LORA_ALPHA = int(os.getenv("STT_TRAIN_LORA_ALPHA", "128"))
+EPOCHS = int(os.getenv("STT_TRAIN_EPOCHS", "3"))
+BATCH_SIZE = int(os.getenv("STT_TRAIN_BATCH_SIZE", "1"))
+GRAD_ACCUM = int(os.getenv("STT_TRAIN_GRAD_ACCUM", "4"))
+LR = float(os.getenv("STT_TRAIN_LR", "2e-4"))
+WARMUP_STEPS = int(os.getenv("STT_TRAIN_WARMUP_STEPS", "5"))
+LOGGING_STEPS = int(os.getenv("STT_TRAIN_LOGGING_STEPS", "1"))
+EVAL_STRATEGY = os.getenv("STT_TRAIN_EVAL_STRATEGY", "epoch").strip().lower() or "epoch"
+EVAL_STEPS = int(os.getenv("STT_TRAIN_EVAL_STEPS", "594"))
+SAVE_STRATEGY = os.getenv("STT_TRAIN_SAVE_STRATEGY", EVAL_STRATEGY).strip().lower() or EVAL_STRATEGY
+SAVE_STEPS = int(os.getenv("STT_TRAIN_SAVE_STEPS", "594"))
+SAVE_TOTAL_LIMIT = int(os.getenv("STT_TRAIN_SAVE_TOTAL_LIMIT", "2"))
+MAX_STEPS = int(os.getenv("STT_TRAIN_MAX_STEPS", "-1"))
+DATASET_NUM_PROC = int(os.getenv("STT_TRAIN_DATASET_NUM_PROC", "1"))
+LOAD_BEST_MODEL_AT_END = os.getenv("STT_TRAIN_LOAD_BEST_MODEL_AT_END", "1").strip().lower() in ("1", "true", "yes")
+
+
+def save_training_metrics(trainer, run_dir: Path, output_dir: Path) -> tuple[Path, Path]:
+    log_history = trainer.state.log_history
+    json_path = output_dir / "metrics_history.json"
+    csv_path = output_dir / "metrics_history.csv"
+
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(log_history, f, indent=2, ensure_ascii=False)
+
+    fieldnames: list[str] = []
+    for row in log_history:
+        for key in row.keys():
+            if key not in fieldnames:
+                fieldnames.append(key)
+
+    with open(csv_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in log_history:
+            writer.writerow(row)
+
+    run_json = run_dir / "metrics_history.json"
+    run_csv = run_dir / "metrics_history.csv"
+    run_json.write_text(json_path.read_text(encoding="utf-8"), encoding="utf-8")
+    run_csv.write_text(csv_path.read_text(encoding="utf-8"), encoding="utf-8")
+    return json_path, csv_path
+
+
+def resolve_model_source() -> str:
+    if MODEL_PATH_OVERRIDE:
+        path = Path(MODEL_PATH_OVERRIDE)
+        if path.exists():
+            return str(path)
+
+    snapshot = resolve_hf_snapshot("models--unsloth--gemma-4-E2B-it")
+    if snapshot:
+        return snapshot
+
+    return MODEL_NAME
 
 
 def load_unsloth_model(FastModel):
     common_kwargs = dict(
-        model_name=MODEL_NAME,
+        model_name=resolve_model_source(),
         dtype=None,
         max_seq_length=MAX_SEQ_LEN,
         load_in_4bit=True,
@@ -105,6 +159,10 @@ def check_prerequisites() -> int:
         print(f"[ERROR] Training data not found: {TRAIN_DATA}")
         print("  Run step 4 (prepare_stt_dataset.py) first.")
         sys.exit(1)
+    if not VAL_DATA.exists():
+        print(f"[ERROR] Validation data not found: {VAL_DATA}")
+        print("  Run step 4 (prepare_stt_dataset.py) first.")
+        sys.exit(1)
 
     with open(TRAIN_DATA, encoding="utf-8") as f:
         count = sum(1 for _ in f)
@@ -141,14 +199,16 @@ def train():
     run_dir.mkdir(exist_ok=True)
 
     print(f"\n[1/5] Loading {MODEL_NAME} (4-bit QLoRA) ...")
+    print(f"  Source: {resolve_model_source()}")
     model, processor = load_unsloth_model(FastModel)
     tokenizer = get_tokenizer(processor)
     print("  Model loaded")
 
     print(f"\n[2/5] Applying LoRA (r={LORA_R}, alpha={LORA_ALPHA}) ...")
+    # Gemma 4 routes audio through the multimodal vision/audio stack.
     model = FastModel.get_peft_model(
         model,
-        finetune_vision_layers=False,
+        finetune_vision_layers=True,
         finetune_language_layers=True,
         finetune_attention_modules=True,
         finetune_mlp_modules=True,
@@ -175,16 +235,18 @@ def train():
         args=SFTConfig(
             output_dir=str(run_dir),
             per_device_train_batch_size=BATCH_SIZE,
+            per_device_eval_batch_size=1,
             gradient_accumulation_steps=GRAD_ACCUM,
             warmup_steps=WARMUP_STEPS,
             num_train_epochs=EPOCHS,
             learning_rate=LR,
             logging_steps=LOGGING_STEPS,
-            eval_strategy="steps",
+            eval_strategy=EVAL_STRATEGY,
             eval_steps=EVAL_STEPS,
-            save_strategy="steps",
+            save_strategy=SAVE_STRATEGY,
             save_steps=SAVE_STEPS,
-            save_total_limit=3,
+            save_total_limit=SAVE_TOTAL_LIMIT,
+            max_steps=MAX_STEPS,
             optim="adamw_8bit",
             weight_decay=0.001,
             lr_scheduler_type="linear",
@@ -192,17 +254,22 @@ def train():
             bf16=use_bf16,
             gradient_checkpointing=True,
             report_to="none",
-            load_best_model_at_end=True,
+            load_best_model_at_end=LOAD_BEST_MODEL_AT_END,
             metric_for_best_model="eval_loss",
             greater_is_better=False,
             remove_unused_columns=False,
+            dataset_num_proc=DATASET_NUM_PROC,
             max_length=None,
         ),
     )
 
     print(f"\n[5/5] Training ...")
     print(f"  Epochs: {EPOCHS} | Batch: {BATCH_SIZE} | Grad accum: {GRAD_ACCUM}")
-    print(f"  LR: {LR} | LoRA r: {LORA_R}\n")
+    print(
+        f"  LR: {LR} | LoRA r: {LORA_R} | Max seq len: {MAX_SEQ_LEN} | "
+        f"Eval: {EVAL_STRATEGY}/{EVAL_STEPS} | Save: {SAVE_STRATEGY}/{SAVE_STEPS} | "
+        f"Best-at-end: {LOAD_BEST_MODEL_AT_END} | Dataset proc: {DATASET_NUM_PROC}\n"
+    )
 
     stats = trainer.train()
 
@@ -210,6 +277,10 @@ def train():
     model.save_pretrained(str(adapter_dir))
     processor.save_pretrained(str(adapter_dir))
     print(f"\n  LoRA adapter saved: {adapter_dir}")
+
+    metrics_json, metrics_csv = save_training_metrics(trainer, run_dir, OUTPUT_DIR)
+    print(f"  Metrics JSON: {metrics_json}")
+    print(f"  Metrics CSV:  {metrics_csv}")
 
     gguf_dir = OUTPUT_DIR / "gguf"
     gguf_dir.mkdir(exist_ok=True)
@@ -228,6 +299,8 @@ def train():
                 "model": MODEL_NAME,
                 "epochs": EPOCHS,
                 "lora_r": LORA_R,
+                "max_seq_len": MAX_SEQ_LEN,
+                "max_steps": MAX_STEPS,
                 "train_loss": stats.training_loss,
                 "run_dir": str(run_dir),
             },
@@ -240,6 +313,7 @@ def train():
     print(f"  Final loss:   {stats.training_loss:.4f}")
     print(f"  Adapter:      {adapter_dir}")
     print(f"  GGUF:         {gguf_dir}")
+    print(f"  Metrics:      {metrics_csv}")
     print(f"{'=' * 55}")
 
 
