@@ -10,16 +10,25 @@
 | Quality | medium |
 | Architecture | Piper VITS |
 | Sample rate | 22050 Hz |
-| Speaker | Native Greek female speaker |
+| Speaker | Chara Kaltsou |
 | License | **CC BY-NC 4.0** |
 | File | `el_GR-joy-medium.onnx` + `el_GR-joy-medium.onnx.json` |
 | Project | Gemma4GR — https://github.com/Efs-O/Gemma4GR |
 
 ---
 
+## Speaker
+
+**Chara Kaltsou** (chara_kaltsou@yahoo.gr)
+BA, Department of German Language and Philology, Aristotle University of Thessaloniki (AUTH)
+MA, Hellenic Open University of Patras (HOU)
+Native Greek speaker
+
+---
+
 ## About the Voice
 
-JOY is a high-quality Greek Piper TTS voice trained entirely on human recordings by a native Greek speaker. It was created to fill the gap in open-source Greek TTS — all existing community voices were trained on synthetic or low-quality data, resulting in robotic, mispronounced output unsuitable for educational or assistive applications.
+JOY is a high-quality Greek Piper TTS voice trained entirely on human recordings by a native Greek speaker with formal academic training in linguistics and philology. It was created to fill the gap in open-source Greek TTS — all existing community voices were trained on synthetic or low-quality data, resulting in robotic, mispronounced output unsuitable for educational or assistive applications.
 
 JOY is designed for:
 - Educational software (Gemma4Kids)
@@ -35,7 +44,7 @@ JOY is designed for:
 |-----------|-------|
 | Training framework | piper-train (official) |
 | Base checkpoint | Pre-trained Greek Piper checkpoint |
-| Dataset size | ~3000 utterances (human recordings) |
+| Dataset size | 3,216 utterances (human recordings) |
 | Dataset format | LJSpeech (22050 Hz WAV + metadata.csv) |
 | Epochs | 20 |
 | Batch size | 32 |
@@ -103,9 +112,9 @@ If you use this voice in a research or academic context:
 ```
 @misc{gemma4gr-joy-voice-2026,
   title  = {JOY: A High-Quality Greek Piper TTS Voice},
-  author = {Gemma4GR Project},
+  author = {Kaltsou, Chara},
   year   = {2026},
   url    = {https://github.com/Efs-O/Gemma4GR},
-  note   = {CC BY-NC 4.0}
+  note   = {CC BY-NC 4.0. Speaker: Chara Kaltsou, BA AUTH, MA HOU}
 }
 ```
