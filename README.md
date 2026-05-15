@@ -63,6 +63,28 @@ Full pipeline table: [CLAUDE.md](CLAUDE.md)
 
 ---
 
+## JOY Voice — Technical Notes
+
+Getting Piper to train locally on Windows required significant engineering work. The original plan was to use Vast.ai (Linux cloud GPU) but we got it running locally with Docker Desktop + NVIDIA Container Toolkit.
+
+The main challenges solved:
+
+**1. Building piper-phonemize from source inside Docker**
+Piper's phonemizer is a C++ library (CMake) that downloads ONNX Runtime and builds espeak-ng as an ExternalProject. We pin exact git SHAs (`setup_piper_sources.py`) for reproducibility and drive the full build inside `Dockerfile.piper`.
+
+**2. Upstream import path bug**
+Piper's `monotonic_align` Cython extension has a broken relative import (`from .monotonic_align.core import` → `from .core import`). We patch it at build time in the Dockerfile.
+
+**3. Runtime library survival across bind-mounts**
+`train_piper.py` bind-mounts the host source tree over `/app/piper-phonemize-src` at runtime, which would hide the ONNX Runtime and espeak-ng `.so` files built into the image. We copy them to `/opt/piper-phonem-deps/lib` before the mount and set `LD_LIBRARY_PATH` accordingly.
+
+**4. PyTorch 2.6 checkpoint compatibility**
+PyTorch 2.6 defaults `torch.load(weights_only=True)`, which breaks Piper's `.ckpt` resume logic. Fixed with `ENV TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` in the Dockerfile.
+
+Scripts: [`Dockerfile.piper`](Dockerfile.piper) · [`training/setup_piper_sources.py`](training/setup_piper_sources.py) · [`training/train_piper.py`](training/train_piper.py)
+
+---
+
 ## Evaluation
 
 Evaluated on 54 curated Greek cases (20 text Q&A + 34 spoken audio):
