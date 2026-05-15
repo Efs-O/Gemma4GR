@@ -42,6 +42,22 @@ build/
 .DS_Store
 Thumbs.db
 
+# Internal project docs (local only, not for public hackathon repo)
+CLAUDE.md
+MOIRA_TTS_SESSION_REPORT.md
+PIPER_REPLACES_MOIRA_PLAN.md
+PHASE_A_PLAN.md
+PHASE_B_PLAN.md
+ENV_VARS.md
+
+# Training data (generated, proprietary — kept local)
+data/qa_pairs.jsonl
+data/eval_curated/audio_cases.jsonl
+data/eval_curated/text_cases.jsonl
+data/voice_sentences.jsonl
+data/train_stt_final_report.json
+data/human_voice_dataset/recording_state.json
+
 # Session / planning notes (local only)
 SESSION_REPORT_*.md
 EVALUATION_REPORT*.md
