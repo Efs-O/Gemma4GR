@@ -36,21 +36,27 @@ JOY is named after **Χαρά** (Chara — Joy in Greek), who records all voice 
 ## Pipeline
 
 ```
+Phase A — JOY Greek voice (Piper TTS)
+  generate_voice_sentence_list.py
+  → native speaker records 3,217 WAVs across 17 categories
+  → train_piper.py (Docker, Vast.ai Linux GPU)
+  → el_GR-joy-medium.onnx  [HuggingFace: Efso/joy-greek-tts]
+
 Phase 1 — STT adapter
-  human voice recordings + JOY synthetic WAVs
+  JOY synthetic WAVs + human voice recordings (3,217 WAVs)
   → prepare_stt_final_dataset.py
   → train_stt_final_local.py  (FastVisionModel, QLoRA r=32, 2 epochs)
   → output/e4b_stt_final/lora_adapter
 
 Phase 2 — Q&A adapter
-  generate_qa_pipeline.py (Ollama qwen3.5)
+  generate_qa_pipeline.py (Ollama qwen3.5, 2,476 pairs, 10 categories)
   → prepare_qa_dataset.py
   → train_qa_local.py  (FastModel, QLoRA r=32, 2 epochs)
   → output/e4b_greek_qa/lora_adapter
 
 Phase 3 — Merge + release
-  merge_adapters.py → Unsloth save_pretrained_gguf → HuggingFace
-  JOY ONNX → Piper TTS voice output
+  merge_adapters.py → Unsloth save_pretrained_gguf
+  → gemma4gr-e4b-v2-q4_k_m.gguf  [HuggingFace: Efso/gemma-4-E4B-it-GR-v2]
 ```
 
 Full pipeline table: [CLAUDE.md](CLAUDE.md)
