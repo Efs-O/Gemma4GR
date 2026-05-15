@@ -39,7 +39,7 @@ JOY is named after **Χαρά** (Chara — Joy in Greek), who records all voice 
 Phase A — JOY Greek voice (Piper TTS)
   generate_voice_sentence_list.py
   → native speaker records 3,217 WAVs across 17 categories
-  → train_piper.py (Docker, Vast.ai Linux GPU)
+  → train_piper.py (local)
   → el_GR-joy-medium.onnx  [HuggingFace: Efso/joy-greek-tts]
 
 Phase 1 — STT adapter
