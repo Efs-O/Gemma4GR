@@ -1,6 +1,24 @@
 # Gemma4GR
 
-Fine-tuning Google Gemma 4 for Greek STT and creating **JOY** — the first high-quality open-source Greek Piper TTS voice.
+Fine-tuning Google Gemma 4 for Greek speech understanding and language generation — and building **JOY**, the first high-quality open-source Greek Piper TTS voice.
+
+> **Hackathon submission:** [Google Gemma 4 Good Hackathon (Kaggle, May 2026)](https://www.kaggle.com/competitions/google-gemma-4-good-hackathon)
+
+---
+
+## Model
+
+**[Efso/gemma-4-E4B-it-GR-v2](https://huggingface.co/Efso/gemma-4-E4B-it-GR-v2)** — Gemma 4 E4B fine-tuned for:
+1. **Greek STT** — understands spoken Modern Greek across 17 voice categories (3,217 human recordings + JOY synthetic speech)
+2. **Greek Text Q&A** — fluent, culturally accurate Greek prose across 10 topic categories (2,476 curated pairs)
+
+Both adapters merged into a single GGUF, ready for Ollama or llama.cpp.
+
+| File | Size | Use |
+|------|------|-----|
+| `gemma4gr-e4b-v2-q4_k_m.gguf` | 5.0 GB | Primary inference |
+| `gemma4gr-e4b-v2-q8_0.gguf` | 7.5 GB | Higher precision |
+| `gemma4gr-e4b-v2-mmproj.gguf` | 945 MB | Audio/vision projection |
 
 ---
 
@@ -8,14 +26,73 @@ Fine-tuning Google Gemma 4 for Greek STT and creating **JOY** — the first high
 
 | Output | Description |
 |--------|-------------|
-| **JOY voice** (`el_GR-joy-medium.onnx`) | A new high-quality Greek Piper TTS voice trained on native human recordings. Released CC-BY-NC. |
-| **Gemma4GR GGUF** | Gemma 4 E4B fine-tuned for Greek STT. Trained on 3,216 human voice recordings (2,895 training, 321 validation). STT LoRA only — QA excluded from final release. Available at [Efso/gemma4gr-e4b-greek-stt](https://huggingface.co/Efso/gemma4gr-e4b-greek-stt) |
+| **Gemma4GR GGUF** | Gemma 4 E4B fine-tuned for Greek STT + Q&A. Two QLoRA adapters merged via Unsloth. |
+| **JOY voice** (`el_GR-joy-medium.onnx`) | First high-quality open-source Greek Piper TTS voice, recorded by a native speaker. CC BY-NC 4.0. |
 
-### Why JOY exists
+JOY is named after **Χαρά** (Chara — Joy in Greek), who records all voice sessions.
 
-Every freely available Greek TTS voice today was trained on synthetic or low-quality data — the audio is robotic, mispronounced, and unusable for educational software. This project fills that gap. JOY is recorded by a native Greek speaker in full sessions and trained using the official Piper pipeline. The resulting `.onnx` will be the best freely available Greek voice when it ships.
+---
 
-The voice is named after **Χαρά** (Chara — Joy in Greek), who records all sessions.
+## Pipeline
+
+```
+Phase 1 — STT adapter
+  human voice recordings + JOY synthetic WAVs
+  → prepare_stt_final_dataset.py
+  → train_stt_final_local.py  (FastVisionModel, QLoRA r=32, 2 epochs)
+  → output/e4b_stt_final/lora_adapter
+
+Phase 2 — Q&A adapter
+  generate_qa_pipeline.py (Ollama qwen3.5)
+  → prepare_qa_dataset.py
+  → train_qa_local.py  (FastModel, QLoRA r=32, 2 epochs)
+  → output/e4b_greek_qa/lora_adapter
+
+Phase 3 — Merge + release
+  merge_adapters.py → Unsloth save_pretrained_gguf → HuggingFace
+  JOY ONNX → Piper TTS voice output
+```
+
+Full pipeline table: [CLAUDE.md](CLAUDE.md)
+
+---
+
+## Evaluation
+
+Evaluated on 54 curated Greek cases (20 text Q&A + 34 spoken audio):
+
+| Metric | Base E4B | Gemma4GR v2 | Δ |
+|--------|----------|-------------|---|
+| Overall pass rate | 35% | 45% | **+29%** |
+| Audio spoken_qa passes | 22% | 37% | **+67%** |
+| Text Q&A passes | 57% | 60% | +4% |
+| Avg token F1 | 0.222 | 0.284 | +28% |
+
+Full results: [tests/benchmark_results/](tests/benchmark_results/)
+
+---
+
+## Quick Start
+
+```bash
+cp .env.example .env        # fill HF_TOKEN
+python menu.py              # main TUI
+
+# Standalone
+python training/run_final_local_sequence.py   # full E4B training sequence
+python training/merge_adapters.py             # merge + GGUF export
+python tests/compare_4bit_models_gui.py       # compare base vs fine-tuned
+```
+
+---
+
+## Environment
+
+- Python 3.11 · Windows 10
+- NVIDIA RTX 5060 Ti — 16 GB VRAM
+- E4B (4B params) fits locally with QLoRA 4-bit
+- Shared HuggingFace cache: `N:\.cache\huggingface\hub`
+- Teacher model: `qwen3.5:397b-cloud` via Ollama (`localhost:11434`)
 
 ---
 
@@ -24,117 +101,14 @@ The voice is named after **Χαρά** (Chara — Joy in Greek), who records all 
 | Component | License |
 |-----------|---------|
 | Code (this repo) | MIT |
-| **JOY voice** (`el_GR-joy-medium.onnx` + recordings) | **CC BY-NC 4.0** — free to use, share, and adapt for non-commercial purposes with attribution. Commercial use requires separate permission. |
-
-See [VOICE_CARD.md](VOICE_CARD.md) for full voice metadata and attribution requirements.
-
----
-
-## Pipeline Overview
-
-```
-Phase A — JOY voice (human recording → Piper ONNX)
-  generate_voice_sentence_list.py → record → train_piper.py
-  Compute: Vast.ai Linux GPU (Docker-native, 6-12h)
-
-Phase B — Gemma Greek Q&A (text LoRA) — built and tested; excluded from final merged model
-  (QA LoRA trained, validated; intentionally not merged into the STT-only release)
-
-Phase C — Gemma Greek STT (audio LoRA) — requires JOY ONNX from Phase A
-  synthesize_qa_audio.py → prepare_stt_qa_dataset.py → train_stt_qa_local.py
-  or synthesize_stt_audio_piper.py → prepare_stt_dataset.py → train_e2b_local.py
-  Compute: local RTX 4060 Ti
-
-Phase D — Ship
-  merge_adapters.py → merged GGUF → Gemma4Kids runtime
-  JOY ONNX speaks Gemma's Greek text output
-```
-
-Post-training note for the final JOY rebuild: after the full high-quality Piper training run finishes and the new `el_GR-joy-medium.onnx` is exported, do a short inference-tuning pass before treating that voice as final. Re-check `length_scale`, `noise_scale`, and `noise_w` in the matching `.onnx.json` or via Piper CLI overrides, because the best runtime settings for the small interim JOY voice may not be the best settings for the full-trained voice.
-
-Full pipeline table: [CLAUDE.md](CLAUDE.md)  
-Compute decisions: [COMPUTE_STRATEGY.md](COMPUTE_STRATEGY.md)  
-Piper migration plan: [PIPER_REPLACES_MOIRA_PLAN.md](PIPER_REPLACES_MOIRA_PLAN.md)
+| Gemma4GR GGUF model | [Gemma Terms of Use](https://ai.google.dev/gemma/terms) |
+| JOY voice (`el_GR-joy-medium.onnx` + recordings) | CC BY-NC 4.0 — Chara Kaltsou / Gemma4GR project |
 
 ---
 
-## Compute Strategy (summary)
+## Acknowledgements
 
-| Workload | Platform | Reason |
-|----------|----------|--------|
-| Piper voice training | **Vast.ai first** | Docker-native Linux GPU; 6-12h vs 24-48h local |
-| Gemma E2B LoRAs | **Local** | Fits in 16 GB VRAM |
-| Gemma E4B (if needed) | **Vast.ai A100 or Colab Pro** | 17 GB minimum; local does not fit |
-| Merge → GGUF | **Local** | CPU task |
-
-**Before spending money on Vast.ai:** always run the local smoke tests first.
-- Piper parity test: Docker, 20 samples
-- Gemma E2B smoke: native Windows, 200 Q/A pairs, bounded training
-See [COMPUTE_STRATEGY.md](COMPUTE_STRATEGY.md) §6.
-
----
-
-## Quick Start
-
-```bash
-# 1. Copy env and fill HF_TOKEN
-cp .env.example .env
-
-# 2. Piper Docker training (clone rhasspy sources + build image once)
-python training/setup_piper_sources.py
-docker build -f Dockerfile.piper -t piper-training:local .
-
-# 3. Main menu
-python menu.py
-
-# 4. Standalone scripts
-python training/generate_voice_sentence_list.py   # Phase A step 1
-python training/generate_qa_pipeline.py           # Phase B step 1
-python training/synthesize_stt_audio_piper.py     # Phase C step 1
-python training/merge_adapters.py                 # Phase D
-```
-
-To compare `base E4B` and `fine-tuned E4B` side by side with Greek text and WAV prompts while playing answers through Piper JOY:
-
-```bash
-python tests/compare_4bit_models_gui.py
-```
-
----
-
-## Environment
-
-- Python 3.11 · Windows 10 / WSL2
-- RTX 4060 Ti or 5060 Ti — 16 GB VRAM
-- Docker Desktop + NVIDIA Container Toolkit (for Piper training)
-- Vast.ai account (for Piper + E4B cloud runs)
-- HuggingFace token in `.env`
-- Shared Hugging Face cache can live on `N:\.cache\huggingface\hub`
-
-## Smoke Notes
-
-- Gemma smoke tests run natively on Windows, not in Docker.
-- Piper training is the path that needs Docker parity before any paid remote run.
-- Local Gemma smoke now validates:
-  - model resolution from `N:\.cache`
-  - 200-pair text Q/A training
-  - 200-pair audio-Q/A training with JOY-generated WAVs
-  - trainer metrics export to JSON and CSV under each output directory
-
----
-
-## Smoke Status
-
-- Piper parity testing is a Docker job locally because the paid remote Piper path is also Docker/Linux.
-- Gemma E2B smoke and local finetunes are native Windows GPU jobs, not Docker jobs.
-- Shared Hugging Face model snapshots are expected under `N:\.cache\huggingface\hub\`.
-- The validated local smoke corpus is `200` Q&A pairs:
-- text smoke: `data/train_qa_smoke_200.jsonl` / `data/val_qa_smoke_200.jsonl`
-- audio smoke: `data/train_stt_qa_smoke_200.jsonl` / `data/val_stt_qa_smoke_200.jsonl`
-- The audio-Q&A trainer uses a script-level workaround for a TRL multimodal metrics bug. No package versions were changed to make the smoke run pass.
-
----
-
-## Community Contribution
-
-The JOY voice will be published on the Piper voice repository and HuggingFace under CC-BY-NC once training is complete and quality is validated. If you use it, please credit: **JOY Greek voice — Gemma4GR project, CC BY-NC 4.0**.
+- [Unsloth](https://github.com/unslothai/unsloth) — QLoRA fine-tuning
+- [Google DeepMind](https://deepmind.google) — Gemma 4 base model
+- [Piper TTS](https://github.com/rhasspy/piper) — Greek voice synthesis
+- Chara Kaltsou — JOY Greek voice recordings
