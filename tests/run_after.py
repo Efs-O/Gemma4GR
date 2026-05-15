@@ -28,7 +28,8 @@ BASE = Path(__file__).parent.parent
 LLAMA_PORT = int(os.getenv("LLAMA_SERVER_PORT", "8080"))
 LLAMA_SERVER_EXE = os.getenv("LLAMA_SERVER_EXE", "")
 
-MERGED_DIR = BASE / "output" / "merged_gguf"
+_gguf_cache = os.getenv("GGUF_CACHE_DIR", r"N:\.cache\huggingface\hub")
+MERGED_DIR  = Path(_gguf_cache) / "gemma4gr-e2b"
 MERGE_SUMMARY = BASE / "output" / "merge_summary.json"
 GGUF_E2B_FT = BASE / "output" / "e2b_greek_stt" / "gguf" / "gemma-4-E2B-it-Q4_K_M.gguf"
 GGUF_E4B_FT = BASE / "output" / "e4b_greek_stt" / "gguf" / "gemma-4-E4B-it-Q4_K_M.gguf"

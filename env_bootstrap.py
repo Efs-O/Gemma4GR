@@ -15,6 +15,90 @@ UNSLOTH_PYTHON_ENV = "GEMMA4GR_UNSLOTH_PYTHON"
 ACTIVE_UNSLOTH_PYTHON_ENV = "GEMMA4GR_ACTIVE_UNSLOTH_PYTHON"
 
 
+def huggingface_hub_roots() -> list[Path]:
+    candidates: list[Path] = []
+
+    explicit_hub = os.getenv("HUGGINGFACE_HUB_CACHE", "").strip()
+    if explicit_hub:
+        candidates.append(Path(explicit_hub))
+
+    hf_home = os.getenv("HF_HOME", "").strip()
+    if hf_home:
+        candidates.append(Path(hf_home) / "hub")
+
+    transformers_cache = os.getenv("TRANSFORMERS_CACHE", "").strip()
+    if transformers_cache:
+        candidates.append(Path(transformers_cache))
+
+    gguf_cache_dir = os.getenv("GGUF_CACHE_DIR", "").strip()
+    if gguf_cache_dir:
+        candidates.append(Path(gguf_cache_dir))
+
+    candidates.extend(
+        [
+            Path(r"N:\.cache\huggingface\hub"),
+            Path.home() / ".cache" / "huggingface" / "hub",
+        ]
+    )
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate).lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(candidate)
+    return unique
+
+
+def resolve_hf_snapshot(repo_dir_name: str) -> str | None:
+    for hub_root in huggingface_hub_roots():
+        repo_root = hub_root / repo_dir_name
+        refs_main = repo_root / "refs" / "main"
+        snapshots = repo_root / "snapshots"
+        if not refs_main.exists() or not snapshots.exists():
+            continue
+        ref = refs_main.read_text(encoding="utf-8", errors="replace").strip()
+        if not ref:
+            continue
+        snapshot = snapshots / ref
+        if snapshot.exists() and snapshot.is_dir():
+            return str(snapshot)
+    return None
+
+
+def normalize_hf_model_path(path_value: str) -> str | None:
+    raw = path_value.strip()
+    if not raw:
+        return None
+
+    path = Path(raw)
+    if not path.exists():
+        return None
+
+    if (path / "config.json").exists():
+        return str(path)
+
+    snapshots = path / "snapshots"
+    refs_main = path / "refs" / "main"
+    if refs_main.exists() and snapshots.exists():
+        ref = refs_main.read_text(encoding="utf-8", errors="replace").strip()
+        if ref:
+            snapshot = snapshots / ref
+            if (snapshot / "config.json").exists():
+                return str(snapshot)
+
+    latest = snapshots / "latest"
+    if (latest / "config.json").exists():
+        return str(latest)
+
+    for candidate in sorted(snapshots.glob("*"), reverse=True) if snapshots.exists() else []:
+        if candidate.is_dir() and (candidate / "config.json").exists():
+            return str(candidate)
+
+    return str(path)
+
+
 def _probe_current_python() -> dict[str, object]:
     torch_version = None
     cuda_available = False

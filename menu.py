@@ -8,10 +8,9 @@ from datetime import datetime
 from dotenv import load_dotenv
 from env_bootstrap import select_python_for_script
 
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+from training.console_encoding import ensure_utf8_console
+
+ensure_utf8_console()
 
 load_dotenv()
 
@@ -49,7 +48,7 @@ PHASE2_STEPS = [
     ("DD", "Phase 2 Full Auto",         "training/run_phase2_auto.py",       "data/train_qa.jsonl"),
     ("E", "Prepare Q&A Dataset",         "training/prepare_qa_dataset.py",   "data/train_qa.jsonl"),
     ("F", "Train QA LoRA — Local GPU",   "training/train_qa_local.py",       "output/e2b_greek_qa/lora_adapter"),
-    ("G", "Merge Adapters → GGUF",       "training/merge_adapters.py",       "output/merged_gguf"),
+    ("G", "Merge Adapters → GGUF",       "training/merge_adapters.py",       r"N:\.cache\huggingface\hub\gemma4gr-e2b"),
 ]
 
 # Results & utilities (shared)

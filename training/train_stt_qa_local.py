@@ -6,8 +6,8 @@ Input:  data/train_stt_qa.jsonl by default, or STT_QA_TRAIN_DATA
 Output: output/e2b_stt_qa/lora_adapter
 
 Trains Gemma to answer Greek questions spoken in the JOY voice.
-Audio format: 16 kHz mono WAV. Language + vision layers on (audio goes through
-the audio encoder, which is part of the vision stack in Gemma 4).
+Audio format: 16 kHz mono WAV. Language-side tuning is on by default, while
+the audio/vision tower stays frozen unless STT_QA_FINETUNE_VISION_LAYERS=1.
 
 Run:
   python training/train_stt_qa_local.py
@@ -30,7 +30,7 @@ BASE = Path(__file__).parent.parent
 if str(BASE) not in sys.path:
     sys.path.insert(0, str(BASE))
 
-from env_bootstrap import ensure_unsloth_runtime, resolve_hf_snapshot
+from env_bootstrap import ensure_unsloth_runtime, normalize_hf_model_path, resolve_hf_snapshot
 
 ensure_unsloth_runtime(BASE)
 
@@ -44,6 +44,19 @@ except Exception:
 
 load_dotenv()
 
+
+def _resolve_output_dir(env_name: str, default_name: str) -> Path:
+    explicit = os.getenv(env_name, "").strip()
+    if explicit:
+        path = Path(explicit)
+        return path if path.is_absolute() else BASE / path
+    root = os.getenv("GEMMA4GR_OUTPUT_ROOT", "").strip()
+    if root:
+        root_path = Path(root)
+        root_path = root_path if root_path.is_absolute() else BASE / root_path
+        return root_path / default_name
+    return BASE / "output" / default_name
+
 _train_data_raw = os.getenv("STT_QA_TRAIN_DATA", "").strip()
 TRAIN_DATA = Path(_train_data_raw) if _train_data_raw else BASE / "data" / "train_stt_qa.jsonl"
 if not TRAIN_DATA.is_absolute():
@@ -52,17 +65,16 @@ _val_data_raw = os.getenv("STT_QA_VAL_DATA", "").strip()
 VAL_DATA = Path(_val_data_raw) if _val_data_raw else BASE / "data" / "val_stt_qa.jsonl"
 if not VAL_DATA.is_absolute():
     VAL_DATA = BASE / VAL_DATA
-OUTPUT_DIR_NAME = os.getenv("STT_QA_OUTPUT_DIR", "").strip() or "e2b_stt_qa"
-OUTPUT_DIR = BASE / "output" / OUTPUT_DIR_NAME
+OUTPUT_DIR = _resolve_output_dir("STT_QA_OUTPUT_DIR", "e2b_stt_qa")
 
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 MODEL_NAME = os.getenv("STT_QA_MODEL", "").strip() or os.getenv("E2B_MODEL", "unsloth/gemma-4-E2B-it")
 MODEL_PATH_OVERRIDE = os.getenv("STT_QA_MODEL_PATH", "").strip() or os.getenv("E2B_MODEL_PATH", "").strip()
 
 MAX_SEQ_LEN = int(os.getenv("STT_QA_MAX_SEQ_LEN", "1024"))
-LORA_R = int(os.getenv("STT_QA_LORA_R", "64"))
-LORA_ALPHA = int(os.getenv("STT_QA_LORA_ALPHA", "128"))
-EPOCHS = int(os.getenv("STT_QA_EPOCHS", "3"))
+LORA_R = int(os.getenv("STT_QA_LORA_R", "32"))
+LORA_ALPHA = int(os.getenv("STT_QA_LORA_ALPHA", "64"))
+EPOCHS = int(os.getenv("STT_QA_EPOCHS", "1"))
 BATCH_SIZE = int(os.getenv("STT_QA_BATCH_SIZE", "1"))
 GRAD_ACCUM = int(os.getenv("STT_QA_GRAD_ACCUM", "4"))
 LR = float(os.getenv("STT_QA_LR", "2e-4"))
@@ -72,11 +84,12 @@ EVAL_STRATEGY = os.getenv("STT_QA_EVAL_STRATEGY", "epoch").strip().lower() or "e
 EVAL_STEPS = int(os.getenv("STT_QA_EVAL_STEPS", "594"))
 SAVE_STRATEGY = os.getenv("STT_QA_SAVE_STRATEGY", EVAL_STRATEGY).strip().lower() or EVAL_STRATEGY
 SAVE_STEPS = int(os.getenv("STT_QA_SAVE_STEPS", "594"))
-SAVE_TOTAL_LIMIT = int(os.getenv("STT_QA_SAVE_TOTAL_LIMIT", "2"))
+SAVE_TOTAL_LIMIT = int(os.getenv("STT_QA_SAVE_TOTAL_LIMIT", "3"))
 MAX_STEPS = int(os.getenv("STT_QA_MAX_STEPS", "-1"))
 _dataset_num_proc_raw = os.getenv("STT_QA_DATASET_NUM_PROC", "").strip()
 DATASET_NUM_PROC = int(_dataset_num_proc_raw) if _dataset_num_proc_raw else None
 LOAD_BEST_MODEL_AT_END = os.getenv("STT_QA_LOAD_BEST_MODEL_AT_END", "1").strip().lower() in ("1", "true", "yes")
+FINETUNE_VISION_LAYERS = os.getenv("STT_QA_FINETUNE_VISION_LAYERS", "0").strip().lower() in ("1", "true", "yes")
 
 
 def save_training_metrics(trainer, run_dir: Path, output_dir: Path) -> tuple[Path, Path]:
@@ -188,18 +201,20 @@ class MemoryMetricsLogger:
 
 def resolve_model_source() -> str:
     if MODEL_PATH_OVERRIDE:
-        path = Path(MODEL_PATH_OVERRIDE)
-        if path.exists():
-            return str(path)
+        normalized = normalize_hf_model_path(MODEL_PATH_OVERRIDE)
+        if normalized:
+            return normalized
 
-    snapshot = resolve_hf_snapshot("models--unsloth--gemma-4-E2B-it")
+    # Derive cache folder name from MODEL_NAME (e.g. unsloth/gemma-4-E4B-it → models--unsloth--gemma-4-E4B-it)
+    cache_folder = "models--" + MODEL_NAME.replace("/", "--")
+    snapshot = resolve_hf_snapshot(cache_folder)
     if snapshot:
         return snapshot
 
     return MODEL_NAME
 
 
-def load_unsloth_model(FastModel):
+def load_unsloth_model(fast_model_cls):
     common_kwargs = dict(
         model_name=resolve_model_source(),
         dtype=None,
@@ -209,11 +224,11 @@ def load_unsloth_model(FastModel):
         token=HF_TOKEN or None,
     )
     try:
-        return FastModel.from_pretrained(**common_kwargs)
+        return fast_model_cls.from_pretrained(**common_kwargs)
     except Exception as exc:
         print(f"  [WARN] Initial model load failed: {exc}")
         print("  [INFO] Retrying from local cache only ...")
-        return FastModel.from_pretrained(**common_kwargs, local_files_only=True)
+        return fast_model_cls.from_pretrained(**common_kwargs, local_files_only=True)
 
 
 def check_prerequisites() -> int:
@@ -254,7 +269,8 @@ def train() -> None:
     from datasets import load_dataset
     from trl import SFTConfig, SFTTrainer
     from transformers import Trainer, TrainerCallback
-    from unsloth import FastModel
+    from unsloth import FastVisionModel
+    from unsloth.trainer import UnslothVisionDataCollator
 
     class AudioSafeSFTTrainer(SFTTrainer):
         """Bypass TRL metric code paths that break on Gemma audio outputs."""
@@ -324,15 +340,15 @@ def train() -> None:
 
     print(f"\n[1/5] Loading {MODEL_NAME} (4-bit QLoRA) ...")
     print(f"  Source: {resolve_model_source()}")
-    model, processor = load_unsloth_model(FastModel)
+    model, processor = load_unsloth_model(FastVisionModel)
     print("  Model loaded")
     memory_logger.snapshot("model_loaded")
 
     print(f"\n[2/5] Applying LoRA (r={LORA_R}, alpha={LORA_ALPHA}) ...")
-    # Vision layers ON — Gemma 4 routes audio through the vision/audio encoder
-    model = FastModel.get_peft_model(
+    # Start with language-side tuning only; enable the audio/vision tower later if needed.
+    model = FastVisionModel.get_peft_model(
         model,
-        finetune_vision_layers=True,
+        finetune_vision_layers=FINETUNE_VISION_LAYERS,
         finetune_language_layers=True,
         finetune_attention_modules=True,
         finetune_mlp_modules=True,
@@ -351,6 +367,7 @@ def train() -> None:
         "dataset_loaded",
         extra={"train_examples": len(train_ds), "val_examples": len(val_ds)},
     )
+    data_collator = UnslothVisionDataCollator(model, processor)
 
     print("\n[4/5] Setting up trainer ...")
     use_bf16 = torch.cuda.is_bf16_supported()
@@ -358,6 +375,7 @@ def train() -> None:
     trainer = AudioSafeSFTTrainer(
         model=model,
         processing_class=processor,
+        data_collator=data_collator,
         train_dataset=train_ds,
         eval_dataset=val_ds,
         callbacks=[MemorySnapshotCallback(memory_logger)],

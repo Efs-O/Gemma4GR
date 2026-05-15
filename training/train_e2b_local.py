@@ -20,7 +20,7 @@ BASE = Path(__file__).parent.parent
 if str(BASE) not in sys.path:
     sys.path.insert(0, str(BASE))
 
-from env_bootstrap import ensure_unsloth_runtime, resolve_hf_snapshot
+from env_bootstrap import ensure_unsloth_runtime, normalize_hf_model_path, resolve_hf_snapshot
 
 ensure_unsloth_runtime(BASE)
 
@@ -92,9 +92,9 @@ def save_training_metrics(trainer, run_dir: Path, output_dir: Path) -> tuple[Pat
 
 def resolve_model_source() -> str:
     if MODEL_PATH_OVERRIDE:
-        path = Path(MODEL_PATH_OVERRIDE)
-        if path.exists():
-            return str(path)
+        normalized = normalize_hf_model_path(MODEL_PATH_OVERRIDE)
+        if normalized:
+            return normalized
 
     snapshot = resolve_hf_snapshot("models--unsloth--gemma-4-E2B-it")
     if snapshot:

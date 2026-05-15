@@ -23,9 +23,9 @@ HF_TOKEN = os.getenv("HF_TOKEN", "")
 MODEL_NAME = os.getenv("E4B_MODEL", "unsloth/gemma-4-E4B-it")
 
 MAX_SEQ_LEN = 4096
-LORA_R = 64
-LORA_ALPHA = 128
-EPOCHS = 3
+LORA_R = 32
+LORA_ALPHA = 64
+EPOCHS = 1
 BATCH_SIZE = 1
 GRAD_ACCUM = 4
 LR = 2e-4

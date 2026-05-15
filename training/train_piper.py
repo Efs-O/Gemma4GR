@@ -18,6 +18,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from console_encoding import ensure_utf8_console
+
+ensure_utf8_console()
+
 load_dotenv()
 
 BASE = Path(__file__).parent.parent
@@ -32,7 +36,17 @@ def _piper_dataset_dir() -> Path:
 
 
 DATASET_DIR = _piper_dataset_dir()
-OUTPUT_DIR = BASE / "output" / "piper_voice"
+
+
+def _piper_output_dir() -> Path:
+    raw = os.getenv("PIPER_OUTPUT_DIR", "").strip()
+    if not raw:
+        return (BASE / "output" / "piper_voice").resolve()
+    candidate = Path(raw).expanduser()
+    return candidate.resolve() if candidate.is_absolute() else (BASE / candidate).resolve()
+
+
+OUTPUT_DIR = _piper_output_dir()
 PREPROCESSED_DIR = OUTPUT_DIR / "preprocessed"
 LIGHTNING_DIR = OUTPUT_DIR / "lightning_logs"
 VALIDATION_STATUS = BASE / "logs" / "validation_status.json"
@@ -40,11 +54,29 @@ VALIDATION_STATUS = BASE / "logs" / "validation_status.json"
 PIPER_BASE_CKPT = Path(os.getenv("PIPER_BASE_CKPT", "")).expanduser() if os.getenv("PIPER_BASE_CKPT") else None
 PIPER_TRAIN_SRC = BASE / "models" / "piper-src" / "src" / "python"
 PIPER_PHONEMIZE_SRC = BASE / "models" / "piper-phonemize"
+PIPER_CSV_LAUNCHER = Path(__file__).resolve().parent / "piper_csv_launcher.py"
 PIPER_LANGUAGE = os.getenv("PIPER_LANGUAGE", "el")
 PIPER_BATCH_SIZE = os.getenv("PIPER_BATCH_SIZE", "32")
-PIPER_MAX_EPOCHS = os.getenv("PIPER_MAX_EPOCHS", "20")
 PIPER_VALIDATION_SPLIT = os.getenv("PIPER_VALIDATION_SPLIT", "0.05")
 PIPER_QUALITY = os.getenv("PIPER_QUALITY", "medium")
+
+
+def _piper_max_epochs_str() -> str:
+    return (os.getenv("PIPER_MAX_EPOCHS", "20") or "20").strip()
+
+
+def _piper_preprocess_max_workers(num_entries: int) -> int:
+    raw = os.getenv("PIPER_PREPROCESS_MAX_WORKERS", "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            print(f"  [WARN] Invalid PIPER_PREPROCESS_MAX_WORKERS={raw!r}; ignoring.")
+
+    cpu_count = os.cpu_count() or 1
+    # Piper preprocess computes batch_size = int(num_utterances / (workers * 2)).
+    # Tiny smoke datasets can hit batch_size=0 unless workers are capped.
+    return max(1, min(cpu_count, max(1, num_entries // 2)))
 
 
 def warn_if_validation_stale(paths: list[Path], label: str):
@@ -161,6 +193,33 @@ def check_checkpoint():
     print(f"  Base checkpoint: {PIPER_BASE_CKPT}")
 
 
+def check_resume_vs_max_epochs():
+    """PyTorch Lightning requires Trainer(max_epochs=X) with X > resumed epoch index."""
+    mx = int(_piper_max_epochs_str())
+    path = PIPER_BASE_CKPT
+    if path is None or not path.exists():
+        return
+    try:
+        import torch
+    except ImportError:
+        print("  [WARN] torch missing on host — cannot verify PIPER_MAX_EPOCHS vs checkpoint epoch.")
+        return
+    try:
+        ck = torch.load(path, map_location=torch.device("cpu"), weights_only=False)
+        ep_raw = ck.get("epoch")
+        if ep_raw is None:
+            return
+        cur = int(ep_raw) if not hasattr(ep_raw, "item") else int(ep_raw.item())
+    except Exception as exc:
+        print(f"  [WARN] Could not read checkpoint epoch: {exc}")
+        return
+    if mx <= cur:
+        print("[ERROR] PIPER_MAX_EPOCHS must be greater than the checkpoint epoch when resuming.")
+        print(f"       Checkpoint epoch: {cur}; PIPER_MAX_EPOCHS: {mx}")
+        print(f"       Example for more training: set PIPER_MAX_EPOCHS={cur + 5} or higher in .env")
+        sys.exit(1)
+
+
 def docker_run(command: str, gpu: bool = False) -> subprocess.CompletedProcess:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     PREPROCESSED_DIR.mkdir(parents=True, exist_ok=True)
@@ -170,15 +229,15 @@ def docker_run(command: str, gpu: bool = False) -> subprocess.CompletedProcess:
     preprocessed_abs = str(PREPROCESSED_DIR.resolve())
     checkpoint_dir_abs = str(PIPER_BASE_CKPT.parent.resolve())
 
-    piper_train_abs = str(PIPER_TRAIN_SRC.resolve())
+    shm = os.getenv("PIPER_DOCKER_SHM_SIZE", "2g")
     cmd = [
         "docker", "run", "--rm",
+        "--shm-size",
+        shm,
         "-v", f"{dataset_abs}:/app/dataset",
         "-v", f"{output_abs}:/app/output",
         "-v", f"{preprocessed_abs}:/app/preprocessed",
         "-v", f"{checkpoint_dir_abs}:/app/checkpoints",
-        "-v", f"{piper_train_abs}:/app/piper-train-src",
-        "-v", f"{str(PIPER_PHONEMIZE_SRC.resolve())}:/app/piper-phonemize-src",
     ]
     if gpu:
         cmd.extend(["--gpus", "all"])
@@ -194,9 +253,11 @@ def docker_run(command: str, gpu: bool = False) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True)
 
 
-def preprocess_dataset():
+def preprocess_dataset(num_entries: int):
     print("\n  Preprocessing Piper dataset ...")
     base_ckpt_name = PIPER_BASE_CKPT.name
+    preprocess_workers = _piper_preprocess_max_workers(num_entries)
+    print(f"  Preprocess workers: {preprocess_workers}")
     command = " && ".join(
         [
             "echo 'piper-training:local ready'",
@@ -206,7 +267,10 @@ def preprocess_dataset():
             " --output-dir /app/preprocessed"
             " --dataset-format ljspeech"
             " --single-speaker"
-            " --sample-rate 22050".format(lang=PIPER_LANGUAGE),
+            " --sample-rate 22050"
+            " --max-workers {workers}".format(
+                lang=PIPER_LANGUAGE, workers=preprocess_workers
+            ),
             "test -f /app/preprocessed/config.json",
             "test -f /app/preprocessed/dataset.jsonl",
             f"test -f /app/checkpoints/{base_ckpt_name}",
@@ -222,6 +286,12 @@ def preprocess_dataset():
 
 
 def run_training():
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(line_buffering=True)
+        except (OSError, ValueError):
+            pass
+
     print("\n  Starting Piper training Docker container ...")
     print("  This will run for hours. Validate samples first before using this step.\n")
 
@@ -229,29 +299,33 @@ def run_training():
     command = " && ".join(
         [
             "echo 'piper-training:local ready'",
-            "python -m piper_train"
+            # -u + PYTHONUNBUFFERED: stream Lightning/progress to host in real time (no block buffering).
+            "export PYTHONUNBUFFERED=1",
+            "python -u /app/piper_csv_launcher.py"
             " --dataset-dir /app/preprocessed"
             " --accelerator gpu"
             " --devices 1"
             f" --batch-size {PIPER_BATCH_SIZE}"
             f" --validation-split {PIPER_VALIDATION_SPLIT}"
             " --num-test-examples 0"
-            f" --max_epochs {PIPER_MAX_EPOCHS}"
+            f" --max_epochs {_piper_max_epochs_str()}"
             f" --resume_from_checkpoint /app/checkpoints/{base_ckpt_name}"
             " --checkpoint-epochs 1"
             " --quality {quality}"
-            " --lightning-dir /app/output/lightning_logs".format(quality=PIPER_QUALITY),
+            " --default_root_dir /app/output".format(quality=PIPER_QUALITY),
         ]
     )
 
+    shm = os.getenv("PIPER_DOCKER_SHM_SIZE", "2g")
     cmd = [
         "docker", "run", "--gpus", "all", "--rm",
+        "--shm-size",
+        shm,
         "-v", f"{str(DATASET_DIR.resolve())}:/app/dataset",
         "-v", f"{str(OUTPUT_DIR.resolve())}:/app/output",
         "-v", f"{str(PREPROCESSED_DIR.resolve())}:/app/preprocessed",
         "-v", f"{str(PIPER_BASE_CKPT.parent.resolve())}:/app/checkpoints",
-        "-v", f"{str(PIPER_TRAIN_SRC.resolve())}:/app/piper-train-src",
-        "-v", f"{str(PIPER_PHONEMIZE_SRC.resolve())}:/app/piper-phonemize-src",
+        "-v", f"{str(PIPER_CSV_LAUNCHER.resolve())}:/app/piper_csv_launcher.py:ro",
         "piper-training:local",
         "bash", "-c", command,
     ]
@@ -268,13 +342,20 @@ def run_training():
     log_path = BASE / "logs" / "piper_training.log"
     with open(log_path, "w", encoding="utf-8") as log:
         for line in proc.stdout:
-            print(line.rstrip())
+            print(line.rstrip(), flush=True)
             log.write(line)
+            log.flush()
     proc.wait()
 
     if proc.returncode != 0:
         print(f"\n[ERROR] Piper training failed (exit {proc.returncode}). See {log_path}")
         sys.exit(1)
+
+    csv_dir = OUTPUT_DIR / "csv_metrics"
+    if csv_dir.is_dir():
+        print(f"\n  CSV metrics (loss curves): {csv_dir}")
+        for m in sorted(csv_dir.rglob("metrics.csv")):
+            print(f"    {m.relative_to(OUTPUT_DIR)}")
 
 
 def export_onnx():
@@ -292,13 +373,14 @@ def export_onnx():
     output_abs = str(OUTPUT_DIR.resolve())
     preprocess_abs = str(PREPROCESSED_DIR.resolve())
 
+    shm = os.getenv("PIPER_DOCKER_SHM_SIZE", "2g")
     cmd = [
         "docker", "run", "--rm",
+        "--shm-size",
+        shm,
         "-v", f"{output_abs}:/app/output",
         "-v", f"{preprocess_abs}:/app/preprocessed",
         "-v", f"{best.parent.resolve()}:/app/checkpoints",
-        "-v", f"{str(PIPER_TRAIN_SRC.resolve())}:/app/piper-train-src",
-        "-v", f"{str(PIPER_PHONEMIZE_SRC.resolve())}:/app/piper-phonemize-src",
         "piper-training:local",
         "bash", "-c",
         " && ".join(
@@ -331,13 +413,17 @@ def main():
     check_docker()
     check_piper_sources()
     check_training_image()
+    if not PIPER_CSV_LAUNCHER.is_file():
+        print(f"[ERROR] CSV metric launcher not found: {PIPER_CSV_LAUNCHER}")
+        sys.exit(1)
 
     print("\n[2/4] Checking dataset + checkpoint ...")
-    check_dataset()
+    dataset_entries = check_dataset()
     check_checkpoint()
+    check_resume_vs_max_epochs()
 
     print("\n[3/4] Preprocessing dataset ...")
-    preprocess_dataset()
+    preprocess_dataset(dataset_entries)
 
     print("\n[4/4] Running training + export ...")
     run_training()

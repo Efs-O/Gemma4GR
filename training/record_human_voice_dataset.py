@@ -139,16 +139,20 @@ class RecorderApp:
         self.device_map = {
             f"{d['index']}: {d['name']} [{d['hostapi']}]": d["index"] for d in self.devices
         }
+
+        # Cache of recorded utterance_ids — kept in sync on save/delete; avoids O(n) disk scans.
+        self._recorded_ids: set[str] = {p.stem for p in WAV_DIR.glob("*.wav")}
+
         self.current_index = self._load_saved_index()
 
-        self.stream: sd.InputStream | None = None
-        self.meter_stream: sd.InputStream | None = None
-        self.stream_lock = threading.Lock()
+        # Single persistent InputStream shared by meter and recording modes.
+        # Never closed/reopened between takes — eliminates WASAPI resource exhaustion crash.
+        self._unified_stream: sd.InputStream | None = None
+
         self.status_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.recording_active = False
         self.speech_started = False
         self.pending_auto_stop = False
-        self.pending_manual_stop = False
         self._discard_audio_until_monotonic: float | None = None
 
         self.preroll_chunks: deque[np.ndarray] = deque()
@@ -190,7 +194,112 @@ class RecorderApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.after(80, self._poll_status_queue)
         self.root.after(120, self._refresh_numeric_labels)
-        self.root.after(150, self._start_meter_stream)
+        self.root.after(150, self._open_unified_stream)
+
+    # ------------------------------------------------------------------
+    # Stream management — one stream for both meter and recording
+    # ------------------------------------------------------------------
+
+    def _open_unified_stream(self) -> None:
+        """Open the single persistent InputStream. Called once at startup and on device change."""
+        self._close_unified_stream()
+        try:
+            device_index = self.selected_device_index()
+        except RuntimeError:
+            return
+
+        def callback(indata: np.ndarray, _frames: int, _time_info: Any, status: sd.CallbackFlags) -> None:
+            if status:
+                if getattr(status, "input_overflow", False):
+                    ctx = "recording" if self.recording_active else "idle meter"
+                    self._maybe_queue_overflow_notice(ctx)
+                else:
+                    self.status_queue.put(("status", f"Audio callback status: {status}"))
+
+            mono, rms = self._gain_mono_and_rms(indata)
+            self.latest_level = rms
+
+            # Meter-only mode — level already updated, nothing more to do.
+            if not self.recording_active:
+                return
+
+            bleed_cutoff = self._discard_audio_until_monotonic
+            if bleed_cutoff is not None:
+                if time.monotonic() < bleed_cutoff:
+                    if not self.speech_started:
+                        self.preroll_chunks.clear()
+                    return
+                self._discard_audio_until_monotonic = None
+
+            threshold = float(self.threshold_var.get())
+            if not self.speech_started:
+                if rms >= threshold:
+                    self.speech_started = True
+                    self.recorded_chunks.extend(list(self.preroll_chunks))
+                    self.recorded_chunks.append(mono)
+                    self.recorded_samples = sum(len(chunk) for chunk in self.recorded_chunks)
+                    self.silence_samples = 0
+                    self.status_queue.put(("status", "Speech detected. Recording..."))
+                    return
+                self.preroll_chunks.append(mono)
+                return
+
+            self.recorded_chunks.append(mono)
+            self.recorded_samples += len(mono)
+
+            if rms >= threshold:
+                self.silence_samples = 0
+            else:
+                self.silence_samples += len(mono)
+
+            min_samples = int(float(self.min_duration_var.get()) * SAMPLE_RATE)
+            max_samples = int(float(self.max_duration_var.get()) * SAMPLE_RATE)
+            trailing_silence_samples = int(float(self.trailing_silence_var.get()) * SAMPLE_RATE)
+
+            if self.recorded_samples >= max_samples:
+                self.pending_auto_stop = True
+                self.status_queue.put(("status", "Max duration reached. Saving take..."))
+            elif self.recorded_samples >= min_samples and self.silence_samples >= trailing_silence_samples:
+                self.pending_auto_stop = True
+                self.status_queue.put(("status", "Trailing silence detected. Saving take..."))
+
+        try:
+            stream = sd.InputStream(
+                samplerate=SAMPLE_RATE,
+                blocksize=BLOCKSIZE,
+                device=device_index,
+                channels=CHANNELS,
+                dtype=DTYPE,
+                latency=STREAM_LATENCY,
+                callback=callback,
+            )
+            stream.start()
+            self._unified_stream = stream
+        except Exception as exc:
+            self._unified_stream = None
+            self.status_var.set(f"Could not open input device: {exc}")
+
+    def _close_unified_stream(self) -> None:
+        stream = self._unified_stream
+        self._unified_stream = None
+        if stream is not None:
+            try:
+                stream.stop()
+            except Exception:
+                pass
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    def _on_input_device_selected(self, _evt: Any = None) -> None:
+        if self.recording_active:
+            return
+        self._open_unified_stream()
+
+    # ------------------------------------------------------------------
+    # Overflow / gain helpers
+    # ------------------------------------------------------------------
 
     def _maybe_queue_overflow_notice(self, context: str) -> None:
         now = time.monotonic()
@@ -212,63 +321,9 @@ class RecorderApp:
         rms = float(np.sqrt(np.mean(np.square(mono))) + 1e-12)
         return mono, rms
 
-    def _mono_gain_rms(self, indata: np.ndarray) -> float:
-        _, rms = self._gain_mono_and_rms(indata)
-        return rms
-
-    def _stop_meter_stream(self) -> None:
-        to_close: sd.InputStream | None = None
-        with self.stream_lock:
-            to_close = self.meter_stream
-            self.meter_stream = None
-        if to_close is not None:
-            try:
-                to_close.stop()
-            except Exception:
-                pass
-            try:
-                to_close.close()
-            except Exception:
-                pass
-
-    def _start_meter_stream(self) -> None:
-        if self.recording_active:
-            return
-        self._stop_meter_stream()
-        try:
-            device_index = self.selected_device_index()
-        except RuntimeError:
-            return
-
-        def meter_callback(indata: np.ndarray, _frames: int, _time_info: Any, status: sd.CallbackFlags) -> None:
-            if status:
-                if getattr(status, "input_overflow", False):
-                    self._maybe_queue_overflow_notice("idle meter")
-                else:
-                    self.status_queue.put(("status", f"Audio callback status: {status}"))
-            self.latest_level = self._mono_gain_rms(indata)
-
-        try:
-            stream = sd.InputStream(
-                samplerate=SAMPLE_RATE,
-                blocksize=BLOCKSIZE,
-                device=device_index,
-                channels=CHANNELS,
-                dtype=DTYPE,
-                latency=STREAM_LATENCY,
-                callback=meter_callback,
-            )
-            with self.stream_lock:
-                self.meter_stream = stream
-            stream.start()
-        except Exception:
-            self._stop_meter_stream()
-            self.status_var.set("Idle level meter could not open this input device.")
-
-    def _on_input_device_selected(self, _evt: Any = None) -> None:
-        if self.recording_active:
-            return
-        self._start_meter_stream()
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
         outer = ttk.Frame(self.root, padding=14)
@@ -300,9 +355,7 @@ class RecorderApp:
             to=INPUT_GAIN_MAX,
             variable=self.input_gain_var,
             orient="horizontal",
-        ).grid(
-            row=0, column=1, sticky="ew", padx=8
-        )
+        ).grid(row=0, column=1, sticky="ew", padx=8)
         self.gain_value_label = ttk.Label(settings, text="")
         self.gain_value_label.grid(row=0, column=2, sticky="w")
 
@@ -406,6 +459,10 @@ class RecorderApp:
     def _select_default_device(self) -> None:
         self.device_combo.current(1)
 
+    # ------------------------------------------------------------------
+    # State persistence
+    # ------------------------------------------------------------------
+
     def _load_saved_index(self) -> int:
         if STATE_PATH.exists():
             try:
@@ -418,7 +475,7 @@ class RecorderApp:
 
         completed = 0
         for prompt in self.prompts:
-            if (WAV_DIR / f"{prompt.utterance_id}.wav").exists():
+            if prompt.utterance_id in self._recorded_ids:
                 completed += 1
             else:
                 break
@@ -428,9 +485,14 @@ class RecorderApp:
         payload = {"current_index": self.current_index, "saved_at": time.time()}
         STATE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    # ------------------------------------------------------------------
+    # Prompt navigation
+    # ------------------------------------------------------------------
+
     def _refresh_prompt_view(self) -> None:
         prompt = self.prompts[self.current_index]
-        recorded = sum(1 for item in self.prompts if (WAV_DIR / f"{item.utterance_id}.wav").exists())
+        # O(1) lookup via cache — no filesystem scan
+        recorded = len(self._recorded_ids)
         self.progress_var.set(
             f"Sentence {self.current_index + 1}/{len(self.prompts)} | Recorded {recorded}/{len(self.prompts)} | ID {prompt.utterance_id}"
         )
@@ -455,7 +517,7 @@ class RecorderApp:
         self.device_combo["values"] = list(self.device_map.keys())
         self._select_default_device()
         self.status_var.set("Input device list refreshed.")
-        self._start_meter_stream()
+        self._open_unified_stream()
 
     def selected_device_index(self) -> int:
         label = self.device_var.get()
@@ -528,7 +590,8 @@ class RecorderApp:
             return
         next_index = self.current_index + 1
         while next_index < len(self.prompts):
-            if not (WAV_DIR / f"{self.prompts[next_index].utterance_id}.wav").exists():
+            # O(1) cache lookup instead of filesystem check
+            if self.prompts[next_index].utterance_id not in self._recorded_ids:
                 self.current_index = next_index
                 self._refresh_prompt_view()
                 self.status_var.set("Next missing take.")
@@ -537,6 +600,10 @@ class RecorderApp:
         self.current_index += 1
         self._refresh_prompt_view()
         self.status_var.set("Next sentence (take exists on disk; re-record to replace).")
+
+    # ------------------------------------------------------------------
+    # Utility actions
+    # ------------------------------------------------------------------
 
     def speak_prompt(self) -> None:
         prompt = self.current_prompt().text
@@ -564,23 +631,25 @@ class RecorderApp:
         if self.recording_active:
             return
         self._cancel_pending_arm()
+        uid = self.current_prompt().utterance_id
         path = self.current_wav_path()
         if path.exists():
             path.unlink()
+        self._recorded_ids.discard(uid)
         self.rewrite_metadata()
-        self.status_var.set(f"Deleted current take for {self.current_prompt().utterance_id}.")
+        self.status_var.set(f"Deleted current take for {uid}.")
+        self._refresh_prompt_view()
+
+    # ------------------------------------------------------------------
+    # Recording
+    # ------------------------------------------------------------------
 
     def start_recording(self) -> None:
         if self.recording_active:
             return
-
-        try:
-            device_index = self.selected_device_index()
-        except Exception as exc:
-            messagebox.showerror("Recorder", str(exc))
+        if self._unified_stream is None:
+            messagebox.showerror("Recorder", "No input stream open. Select a device and try again.")
             return
-
-        self._stop_meter_stream()
 
         self.preroll_chunks = deque(maxlen=self.max_preroll_chunks)
         self.recorded_chunks = []
@@ -589,87 +658,23 @@ class RecorderApp:
         self.recorded_samples = 0
         self.speech_started = False
         self.pending_auto_stop = False
-        self.pending_manual_stop = False
         self._discard_audio_until_monotonic = (
             time.monotonic() + PROMPT_TTS_BLEED_SKIP_SEC if self.read_prompt_var.get() else None
         )
 
-        def callback(indata: np.ndarray, _frames: int, _time_info: Any, status: sd.CallbackFlags) -> None:
-            if status:
-                if getattr(status, "input_overflow", False):
-                    self._maybe_queue_overflow_notice("recording")
-                else:
-                    self.status_queue.put(("status", f"Audio callback status: {status}"))
+        # Flip the mode flag — the persistent stream's callback handles the rest.
+        self.recording_active = True
+        self.status_var.set("Armed. Waiting for speech...")
 
-            mono, rms = self._gain_mono_and_rms(indata)
-            self.latest_level = rms
-
-            bleed_cutoff = self._discard_audio_until_monotonic
-            if bleed_cutoff is not None:
-                if time.monotonic() < bleed_cutoff:
-                    if not self.speech_started:
-                        self.preroll_chunks.clear()
-                    return
-                self._discard_audio_until_monotonic = None
-
-            threshold = float(self.threshold_var.get())
-            if not self.speech_started:
-                if rms >= threshold:
-                    self.speech_started = True
-                    self.recorded_chunks.extend(list(self.preroll_chunks))
-                    self.recorded_chunks.append(mono)
-                    self.recorded_samples = sum(len(chunk) for chunk in self.recorded_chunks)
-                    self.silence_samples = 0
-                    self.status_queue.put(("status", "Speech detected. Recording..."))
-                    return
-                self.preroll_chunks.append(mono)
-                return
-
-            self.recorded_chunks.append(mono)
-            self.recorded_samples += len(mono)
-
-            if rms >= threshold:
-                self.silence_samples = 0
-            else:
-                self.silence_samples += len(mono)
-
-            min_samples = int(float(self.min_duration_var.get()) * SAMPLE_RATE)
-            max_samples = int(float(self.max_duration_var.get()) * SAMPLE_RATE)
-            trailing_silence_samples = int(float(self.trailing_silence_var.get()) * SAMPLE_RATE)
-
-            if self.recorded_samples >= max_samples:
-                self.pending_auto_stop = True
-                self.status_queue.put(("status", "Max duration reached. Saving take..."))
-            elif self.recorded_samples >= min_samples and self.silence_samples >= trailing_silence_samples:
-                self.pending_auto_stop = True
-                self.status_queue.put(("status", "Trailing silence detected. Saving take..."))
-
-        try:
-            self.stream = sd.InputStream(
-                samplerate=SAMPLE_RATE,
-                blocksize=BLOCKSIZE,
-                device=device_index,
-                channels=CHANNELS,
-                dtype=DTYPE,
-                latency=STREAM_LATENCY,
-                callback=callback,
-            )
-            self.stream.start()
-            self.recording_active = True
-            self.status_var.set("Armed. Waiting for speech...")
-            if self.read_prompt_var.get():
-                self.speak_prompt()
-        except Exception as exc:
-            self.stream = None
-            self.recording_active = False
-            self._start_meter_stream()
-            messagebox.showerror("Recorder", f"Could not start recording:\n{exc}")
+        if self.read_prompt_var.get():
+            self.speak_prompt()
 
     def stop_recording(self) -> None:
+        """Stop button — synchronous, always works immediately on the main thread."""
         if not self.recording_active:
             return
-        self.pending_manual_stop = True
         self.status_var.set("Stopping recording...")
+        self._finalize_recording()
 
     def _finalize_recording(self) -> None:
         if self._finalize_running:
@@ -678,21 +683,9 @@ class RecorderApp:
             return
         self._finalize_running = True
         try:
-            with self.stream_lock:
-                if self.stream is not None:
-                    try:
-                        self.stream.stop()
-                    except Exception:
-                        pass
-                    try:
-                        self.stream.close()
-                    except Exception:
-                        pass
-                    self.stream = None
-
+            # Drop out of recording mode — callback reverts to meter-only instantly.
             self.recording_active = False
             self.pending_auto_stop = False
-            self.pending_manual_stop = False
 
             try:
                 if not self.speech_started or not self.recorded_chunks:
@@ -714,6 +707,7 @@ class RecorderApp:
 
                 wav_path = self.current_wav_path()
                 sf.write(str(wav_path), audio, SAMPLE_RATE, subtype="PCM_16")
+                self._recorded_ids.add(wav_path.stem)
                 self.rewrite_metadata()
                 self.status_var.set(f"Saved {wav_path.name}")
 
@@ -731,9 +725,12 @@ class RecorderApp:
                 self.speech_started = False
                 self.recorded_samples = 0
                 self.silence_samples = 0
-                self._start_meter_stream()
         finally:
             self._finalize_running = False
+
+    # ------------------------------------------------------------------
+    # Audio processing
+    # ------------------------------------------------------------------
 
     def trim_silence(self, audio: np.ndarray, threshold: float) -> np.ndarray:
         window = 256
@@ -764,16 +761,20 @@ class RecorderApp:
         return out
 
     def rewrite_metadata(self) -> None:
-        rows = []
-        for item in self.prompts:
-            wav_path = WAV_DIR / f"{item.utterance_id}.wav"
-            if wav_path.exists():
-                rows.append((item.utterance_id, item.text))
-
+        # Use cache for O(1) membership check — no filesystem access per row.
+        rows = [
+            (item.utterance_id, item.text)
+            for item in self.prompts
+            if item.utterance_id in self._recorded_ids
+        ]
         with open(METADATA_PATH, "w", encoding="utf-8", newline="") as handle:
             writer = csv.writer(handle, delimiter="|")
             for utterance_id, text in rows:
                 writer.writerow([utterance_id, text])
+
+    # ------------------------------------------------------------------
+    # Poll loop and label refresh
+    # ------------------------------------------------------------------
 
     def _poll_status_queue(self) -> None:
         while True:
@@ -788,9 +789,9 @@ class RecorderApp:
         cap = LEVEL_BAR_CAP
         self.level_var.set(min(float(self.latest_level), cap))
 
-        if self.recording_active and (self.pending_auto_stop or self.pending_manual_stop):
+        # Only auto-stop triggers finalization via the poll; manual stop is handled directly.
+        if self.recording_active and self.pending_auto_stop:
             self.pending_auto_stop = False
-            self.pending_manual_stop = False
             self._finalize_recording()
 
         self.root.after(80, self._poll_status_queue)
@@ -813,9 +814,8 @@ class RecorderApp:
     def on_close(self) -> None:
         self._cancel_pending_arm()
         if self.recording_active:
-            self.pending_manual_stop = True
             self._finalize_recording()
-        self._stop_meter_stream()
+        self._close_unified_stream()
         self.root.destroy()
 
 

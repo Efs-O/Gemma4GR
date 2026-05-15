@@ -41,3 +41,46 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Python virtual envs (all flavors used in this project)
+.venv311/
+
+# Unsloth runtime-generated JIT cache (machine-specific, regenerated on startup)
+unsloth_compiled_cache/
+
+# Human voice recordings (binary, CC BY-NC — kept local, a few samples go to HF model repo)
+data/human_voice_dataset/wavs/
+data/human_voice_dataset/dry_preview/
+data/human_voice_resampled/
+data/human_voice_smoke_20/
+
+# Piper test recordings
+data/piper_test_20/
+
+# Generated audio outputs
+data/qa_audio/
+
+# Training / validation JSONL datasets (generated, large, not source of truth)
+data/train_*.jsonl
+data/val_*.jsonl
+data/train_*.jsonl.bak
+data/val_*.jsonl.bak
+data/*.bak
+data/*.pre_*.jsonl
+
+# Claude internal
+.claude/
+
+# Debug dumps at repo root
+chat_template_dump.txt
+full_template_dump*.txt
+greek_audio_answer_prompt.txt
+greek_stt_prompt.txt
+data/server_err.txt
+data/server_out.txt
+
+# Video and other large media
+TEST VIDEO/
+
+# Studio logs
+unsloth_studio_*.log

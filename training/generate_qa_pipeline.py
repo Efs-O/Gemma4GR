@@ -7,23 +7,29 @@ Same architecture as generate_voice_sentence_list.py:
   - Target: 2500 unique Q&A pairs across 10 categories
 
 Env vars:
-  QA_PROVIDER       gemini (default), openrouter, ollama
+  QA_PROVIDER       ollama (default; local Ollama + Qwen), gemini, openrouter
   QA_MODE           full (default) or preview
   NUM_QA            2500
-  QA_BATCH_SIZE     6  (small batches keep OpenRouter output tokens per request low)
+  QA_BATCH_SIZE     4  (pairs per OpenRouter/Gemini call — fewer HTTP round trips than 1)
   QA_TEMPERATURE    0.80
   QA_MIN_ANSWER_CHARS  minimum answer length to accept (default 90; was 120)
-  QA_GEMINI_TIMEOUT HTTP read timeout seconds for native Gemini (default 240)
-  QA_OPENROUTER_TIMEOUT  same for OpenRouter (default 240)
-  QA_OPENROUTER_MAX_TOKENS  OpenRouter completion cap (default 3072)
+  QA_GEMINI_TIMEOUT HTTP read timeout seconds for native Gemini (default 180)
+  QA_OPENROUTER_TIMEOUT  same for OpenRouter (default 180; low values cause false timeouts)
+  QA_OPENROUTER_MAX_TOKENS  OpenRouter completion cap (default 4096)
+  OPENROUTER_REASONING_EFFORT  OpenRouter reasoning.effort (default none); omit|default = no reasoning field
   QA_GEMINI_MAX_OUTPUT  native Gemini maxOutputTokens (default 4096)
   GEMINI_API_KEY    required for gemini
   OPENROUTER_API_KEY  required for openrouter
   GEMINI_MODEL      gemini-2.5-flash (default)
-  OPENROUTER_MODEL  google/gemini-2.5-flash (default)
+  OPENROUTER_MODEL  x-ai/grok-4.1-fast (default); override e.g. google/gemini-2.5-flash
   TEACHER_MODEL     qwen3.5:397b-cloud (ollama default)
-  GEMINI_RPM_DELAY  6.5  (seconds between Gemini calls, free-tier safe)
+  QA_OLLAMA_TIMEOUT HTTP read timeout for Ollama /api/chat (default 240)
+  QA_OLLAMA_KEEP_ALIVE  passed to Ollama chat (default 0s; match voice script)
+  QA_OLLAMA_NUM_PREDICT  max tokens per completion in options (default 4096)
+  QA_OLLAMA_THINK  Ollama think: false default (Qwen3: disables reasoning trace; docs.ollama.com/capabilities/thinking); true|1 on
+  GEMINI_RPM_DELAY  seconds between native Gemini batches after a save (default 2.5)
   QA_OUTPUT_FILE    override output path
+  QA_ORTHO_HINTS   1 (default) = rotate Greek orthography nudges per batch; 0 = off
 
 Run:
   python training/generate_qa_pipeline.py
@@ -36,6 +42,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from urllib import error as urllib_error
 from urllib import request
 
 from dotenv import load_dotenv
@@ -46,30 +53,58 @@ BASE = Path(__file__).parent.parent
 DATA_DIR = BASE / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-QA_PROVIDER = os.getenv("QA_PROVIDER", "gemini").strip().lower()
+QA_PROVIDER = os.getenv("QA_PROVIDER", "ollama").strip().lower()
 QA_MODE = os.getenv("QA_MODE", "full").strip().lower()
 NUM_QA = int(os.getenv("NUM_QA", "2500"))
-QA_BATCH_SIZE = int(os.getenv("QA_BATCH_SIZE", "6"))
+QA_BATCH_SIZE = int(os.getenv("QA_BATCH_SIZE", "4"))
 QA_PREVIEW_COUNT = int(os.getenv("QA_PREVIEW_COUNT", "15"))
 TEMPERATURE = float(os.getenv("QA_TEMPERATURE", "0.80"))
 MAX_RETRIES = 4
 MIN_ANSWER_CHARS = int(os.getenv("QA_MIN_ANSWER_CHARS", "90"))
-GEMINI_RPM_DELAY = float(os.getenv("GEMINI_RPM_DELAY", "6.5"))
-GEMINI_HTTP_TIMEOUT = float(os.getenv("QA_GEMINI_TIMEOUT", "240"))
-OPENROUTER_HTTP_TIMEOUT = float(os.getenv("QA_OPENROUTER_TIMEOUT", "240"))
-OPENROUTER_MAX_TOKENS = int(os.getenv("QA_OPENROUTER_MAX_TOKENS", "3072"))
+GEMINI_RPM_DELAY = float(os.getenv("GEMINI_RPM_DELAY", "2.5"))
+GEMINI_HTTP_TIMEOUT = float(os.getenv("QA_GEMINI_TIMEOUT", "180"))
+OPENROUTER_HTTP_TIMEOUT = float(os.getenv("QA_OPENROUTER_TIMEOUT", "180"))
+OLLAMA_HTTP_TIMEOUT = float(os.getenv("QA_OLLAMA_TIMEOUT", "240"))
+OPENROUTER_MAX_TOKENS = int(os.getenv("QA_OPENROUTER_MAX_TOKENS", "4096"))
+OPENROUTER_REASONING_EFFORT = os.getenv("OPENROUTER_REASONING_EFFORT", "none").strip()
 GEMINI_MAX_OUTPUT = int(os.getenv("QA_GEMINI_MAX_OUTPUT", "4096"))
+QA_OLLAMA_KEEP_ALIVE = os.getenv("QA_OLLAMA_KEEP_ALIVE", "0s")
+QA_OLLAMA_NUM_PREDICT = int(os.getenv("QA_OLLAMA_NUM_PREDICT", "4096"))
+# Ollama API: thinking defaults ON for Qwen3-class models; send think:false to disable (faster for JSON-only).
+OLLAMA_API_THINK = os.getenv("QA_OLLAMA_THINK", "false").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
 
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "x-ai/grok-4.1-fast")
 OLLAMA_MODEL = os.getenv("TEACHER_MODEL", "qwen3.5:397b-cloud")
 
-_custom_out = os.getenv("QA_OUTPUT_FILE", "").strip()
-OUT_FILE = Path(_custom_out) if _custom_out else DATA_DIR / "qa_pairs.jsonl"
+CUSTOM_OUT = os.getenv("QA_OUTPUT_FILE", "").strip()
+OUT_FILE = Path(CUSTOM_OUT) if CUSTOM_OUT else DATA_DIR / "qa_pairs.jsonl"
+
+USE_ORTHO_HINTS = os.getenv("QA_ORTHO_HINTS", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+
+# Rotating user-message nudges (thin clusters in prior sentence runs — not exhaustive).
+ORTHO_ROTATION_HINTS: tuple[str, ...] = (
+    "Στις απαντήσεις να εμφανίζονται φυσικά λέξεις με «αυ»/«αύ» ή «ευ»/«εύ» "
+    "(π.χ. αυτός, αύριο, αυτοκίνητο, ευχαριστώ, Ευρώπη) — ενταγμένες στο νόημα, όχι λίστα.",
+    "Συμπεριέλαβε τουλάχιστον μία φυσική λέξη ή οικογένεια με «γκ» όπου ταιριάζει (π.χ. αγκάθι, εγκαταλείπω).",
+    "Συμπεριέλαβε «τσ» ή «τζ» σε καθημερινό ή πολιτιστικό λεξιλόγιο (π.χ. τσάι, τζάκι, τζατζίκι, τσουρέκι).",
+    "Χρησιμοποίησε «μπ» ή «ντ» φυσικά στο κείμενο (π.χ. μπακλαβάς, ντομάτα, δεκανέας).",
+    "Συμπεριέλαβε «ξ» ή «ψ» σε τουλάχιστον μία πρόταση (π.χ. ξεκουράζομαι, ξενοδοχείο, ψάρι).",
+)
 
 # ── Categories ───────────────────────────────────────────────────────────────
 
@@ -137,20 +172,33 @@ SYSTEM_PROMPT = """Είσαι ειδικός εκπαιδευτής ελληνι
 3. Οι απαντήσεις: 2-4 σύντομες προτάσεις, πλήρεις και σαφείς — όχι μακροσκελή κείμενα ούτε επαναλήψεις
 4. Χρησιμοποίησε ποικίλη σύνταξη· κράτα συνολογικά το JSON περιεκτικό (μετρημένο μήκος)
 5. Αποφύγε επαναλαμβανόμενες δομές ερωτήσεων («Τι είναι...» μόνο σε μερικές)
-6. Επέστρεψε μόνο έγκυρο JSON array — χωρίς κείμενο πριν ή μετά"""
+6. Ποικιλία στην ελληνική γραφή: ενσωμάτωνε φυσικά μορφήματα με αυ/ευ, γκ, τσ/τζ, μπ/ντ, ξ/ψ εντός του batch, σύμφωνα με τις οδηγίες του μηνύματος
+7. Επέστρεψε μόνο έγκυρο JSON array — χωρίς κείμενο πριν ή μετά"""
 
 
-def batch_prompt(category: str, description: str, n: int, recent: list[str]) -> str:
+def ortho_extra_instructions(ortho_index: int) -> str:
+    if not USE_ORTHO_HINTS:
+        return ""
+    hint = ORTHO_ROTATION_HINTS[ortho_index % len(ORTHO_ROTATION_HINTS)]
+    return f"\nΟδηγία για αυτό το batch (ενσωμάτωσέ τη φυσικά στις απαντήσεις, όχι ως επιγραφή):\n{hint}\n"
+
+
+def batch_prompt(
+    category: str, description: str, n: int, recent: list[str], ortho_index: int = 0
+) -> str:
     avoid = ""
     if recent:
         lines = "\n".join(f"- {q}" for q in recent[:15])
         avoid = f"\nΑπόφυγε ερωτήσεις παρόμοιες με αυτές:\n{lines}\n"
+
+    ortho = ortho_extra_instructions(ortho_index)
 
     return (
         f"Κατηγορία: {category}\n"
         f"Περιγραφή: {description}\n"
         f"Ζητούμενο πλήθος: {n} ζεύγη\n"
         f"{avoid}\n"
+        f"{ortho}"
         f"Δημιούργησε {n} μοναδικά ζεύγη ερώτησης-απάντησης (απαντήσεις σύντομες, 2-4 προτάσεις).\n"
         f"Σχήμα εξόδου (μόνο αυτό):\n"
         f'[\n  {{"question": "Ερώτηση εδώ;", "answer": "Πλήρης απάντηση εδώ.", '
@@ -198,7 +246,7 @@ def gemini_generate(prompt: str) -> str | None:
 
 
 def openrouter_generate(prompt: str) -> str | None:
-    payload = json.dumps({
+    body: dict = {
         "model": OPENROUTER_MODEL,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -206,7 +254,12 @@ def openrouter_generate(prompt: str) -> str | None:
         ],
         "temperature": TEMPERATURE,
         "max_tokens": OPENROUTER_MAX_TOKENS,
-    }).encode("utf-8")
+    }
+    _re = OPENROUTER_REASONING_EFFORT.lower()
+    if _re not in ("", "omit", "default"):
+        body["reasoning"] = {"effort": _re}
+
+    payload = json.dumps(body).encode("utf-8")
 
     req = request.Request(
         "https://openrouter.ai/api/v1/chat/completions",
@@ -227,16 +280,22 @@ def openrouter_generate(prompt: str) -> str | None:
 
 
 def ollama_generate(prompt: str) -> str | None:
-    payload = json.dumps({
-        "model": OLLAMA_MODEL,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-        "stream": False,
-        "think": False,
-        "options": {"temperature": TEMPERATURE, "num_predict": 8192},
-    }).encode("utf-8")
+    payload = json.dumps(
+        {
+            "model": OLLAMA_MODEL,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            "stream": False,
+            "think": OLLAMA_API_THINK,
+            "keep_alive": QA_OLLAMA_KEEP_ALIVE,
+            "options": {
+                "temperature": TEMPERATURE,
+                "num_predict": QA_OLLAMA_NUM_PREDICT,
+            },
+        }
+    ).encode("utf-8")
 
     req = request.Request(
         f"{OLLAMA_URL}/api/chat",
@@ -245,13 +304,33 @@ def ollama_generate(prompt: str) -> str | None:
         method="POST",
     )
     try:
-        with request.urlopen(req, timeout=180) as resp:
+        with request.urlopen(req, timeout=OLLAMA_HTTP_TIMEOUT) as resp:
             data = json.loads(resp.read())
-        msg = data.get("message", {})
-        return (msg.get("content") or msg.get("thinking") or "").strip() or None
+    except urllib_error.HTTPError as exc:
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            detail = ""
+        print(f"    [WARN] Ollama HTTP {exc.code}: {detail[:800]}")
+        return None
+    except urllib_error.URLError as exc:
+        print(f"    [WARN] Ollama connection: {exc.reason}")
+        return None
     except Exception as exc:
         print(f"    [WARN] Ollama error: {exc}")
         return None
+
+    if data.get("error"):
+        err = data["error"]
+        err_s = err if isinstance(err, str) else json.dumps(err, ensure_ascii=False)
+        print(f"    [WARN] Ollama: {err_s[:800]}")
+        return None
+    msg = data.get("message") or {}
+    text = (msg.get("content") or "").strip()
+    if text:
+        return text
+    thinking = (msg.get("thinking") or "").strip()
+    return thinking or None
 
 
 def llm_generate(prompt: str) -> str | None:
@@ -397,7 +476,14 @@ def main() -> None:
             f"  Gemini HTTP timeout: {GEMINI_HTTP_TIMEOUT}s, "
             f"maxOutputTokens: {GEMINI_MAX_OUTPUT}"
         )
+    elif QA_PROVIDER == "ollama":
+        print(
+            f"  Ollama: {OLLAMA_URL}  model: {OLLAMA_MODEL}  "
+            f"timeout={OLLAMA_HTTP_TIMEOUT}s  "
+            f"think={'true' if OLLAMA_API_THINK else 'false'}"
+        )
     print(f"  Output:   {OUT_FILE}")
+    print(f"  Ortho hints (αυ/ευ, γκ, τσ/τζ, …): {'on' if USE_ORTHO_HINTS else 'off'}")
     print("=" * 64 + "\n")
 
     if not check_provider():
@@ -411,12 +497,24 @@ def main() -> None:
 
     print(f"  Already have: {len(existing)} pairs\n")
 
-    if len(existing) >= target:
-        print(f"Already at target ({target}). Nothing to do.")
-        return
-
     targets = category_targets(target)
+    per_cat_ok = all(
+        counts.get(cat, 0) >= targets[cat] for cat, _ in CATEGORY_SPECS
+    )
+    if per_cat_ok:
+        print(
+            f"Per-category quota for this run is already satisfied "
+            f"(budget {target} pairs across categories). "
+            f"File has {len(existing)} lines — nothing to append."
+        )
+        if QA_MODE == "preview":
+            print(
+                "  Tip: set QA_OUTPUT_FILE=data/qa_preview.jsonl (or another path) "
+                "for an isolated preview, or trim/rename the file to regenerate."
+            )
+        return
     records = existing[:]
+    ortho_seq = 0
 
     with open(OUT_FILE, "a", encoding="utf-8") as out_fh:
         for category, description in CATEGORY_SPECS:
@@ -432,7 +530,11 @@ def main() -> None:
 
                 accepted: list[dict] = []
                 for attempt in range(1, MAX_RETRIES + 1):
-                    raw = llm_generate(batch_prompt(category, description, batch_n, recent_qs))
+                    raw = llm_generate(
+                        batch_prompt(
+                            category, description, batch_n, recent_qs, ortho_seq
+                        )
+                    )
                     if not raw:
                         time.sleep(3)
                         continue
@@ -455,6 +557,8 @@ def main() -> None:
                         break
                     if attempt < MAX_RETRIES:
                         time.sleep(3)
+
+                ortho_seq += 1
 
                 if not accepted:
                     print(f"    [WARN] No valid pairs for {category} — skipping batch")

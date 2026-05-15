@@ -2,11 +2,13 @@
 Phase 2 - Prepare Q&A pairs into chat-format JSONL for text LoRA training.
 
 Input:  data/qa_pairs.jsonl by default, or QA_DATASET_SOURCE
-Output: data/train_qa.jsonl (90% split, chat format)
-        data/val_qa.jsonl   (10% split)
+Output: data/train_qa.jsonl by default, or QA_TRAIN_OUT
+        data/val_qa.jsonl   by default, or QA_VAL_OUT
 
-Format per line (Gemma chat template):
-  {"text": "<bos><start_of_turn>user\n...<end_of_turn>\n<start_of_turn>model\n...<end_of_turn><eos>"}
+Format per line (Gemma4 native chat template):
+  {"text": "<bos><|turn>system\n...<turn|>\n<|turn>user\n...<turn|>\n<|turn>model\n...<turn|>\n"}
+
+NOTE: No hardcoded <eos> — Unsloth SFTTrainer appends it automatically.
 """
 import json
 import os
@@ -20,24 +22,35 @@ load_dotenv()
 
 BASE = Path(__file__).parent.parent
 DATA_DIR = BASE / "data"
-IN_FILE = DATA_DIR / os.getenv("QA_DATASET_SOURCE", "qa_pairs.jsonl")
-TRAIN_OUT = DATA_DIR / "train_qa.jsonl"
-VAL_OUT = DATA_DIR / "val_qa.jsonl"
+_in_raw = os.getenv("QA_DATASET_SOURCE", "qa_pairs.jsonl").strip()
+IN_FILE = Path(_in_raw) if Path(_in_raw).is_absolute() else DATA_DIR / _in_raw
+_train_out_raw = os.getenv("QA_TRAIN_OUT", "").strip()
+TRAIN_OUT = Path(_train_out_raw) if _train_out_raw else DATA_DIR / "train_qa.jsonl"
+if not TRAIN_OUT.is_absolute():
+    TRAIN_OUT = BASE / TRAIN_OUT
+_val_out_raw = os.getenv("QA_VAL_OUT", "").strip()
+VAL_OUT = Path(_val_out_raw) if _val_out_raw else DATA_DIR / "val_qa.jsonl"
+if not VAL_OUT.is_absolute():
+    VAL_OUT = BASE / VAL_OUT
 
 VAL_RATIO = 0.10
 
 BOS = "<bos>"
-TURN_START = "<start_of_turn>"
-TURN_END = "<end_of_turn>"
-EOS = "<eos>"
+TURN_START = "<|turn>"
+TURN_END = "<turn|>"
+SYSTEM_PROMPT = (
+    "Απάντησε μόνο στα Ελληνικά, με φυσική, σωστή και καθαρή γλώσσα. "
+    "Μην χρησιμοποιείς Αγγλικά, Ρωσικά ή άλλη γλώσσα, εκτός αν το ζητά ρητά "
+    "η ερώτηση. Δώσε άμεση, ουσιαστική και πλήρη απάντηση."
+)
 
 
 def format_example(question: str, answer: str) -> str:
     return (
         f"{BOS}"
+        f"{TURN_START}system\n{SYSTEM_PROMPT}{TURN_END}\n"
         f"{TURN_START}user\n{question}{TURN_END}\n"
-        f"{TURN_START}model\n{answer}{TURN_END}"
-        f"{EOS}"
+        f"{TURN_START}model\n{answer}{TURN_END}\n"
     )
 
 
