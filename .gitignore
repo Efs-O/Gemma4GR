@@ -55,8 +55,11 @@ data/qa_pairs.jsonl
 data/eval_curated/audio_cases.jsonl
 data/eval_curated/text_cases.jsonl
 data/voice_sentences.jsonl
+data/voice_sentences.txt
 data/train_stt_final_report.json
 data/human_voice_dataset/recording_state.json
+data/human_voice_dataset/metadata.csv
+data/voice_recording_manifest.csv
 
 # Session / planning notes (local only)
 SESSION_REPORT_*.md
