@@ -16,9 +16,9 @@ Both adapters merged into a single GGUF, ready for Ollama or llama.cpp.
 
 | File | Size | Use |
 |------|------|-----|
-| `gemma4gr-e4b-v2-q4_k_m.gguf` | 5.0 GB | Primary inference |
-| `gemma4gr-e4b-v2-q8_0.gguf` | 7.5 GB | Higher precision |
-| `gemma4gr-e4b-v2-mmproj.gguf` | 945 MB | Audio/vision projection |
+| `gemma-4-e4b-it-gr-v2-Q4_K_M.gguf` | 5.0 GB | Primary inference |
+| `gemma-4-e4b-it-gr-v2-Q8_0.gguf` | 7.5 GB | Higher precision |
+| `gemma-4-e4b-it-gr-v2-mmproj.gguf` | 945 MB | Audio/vision projection |
 
 ---
 
@@ -56,7 +56,7 @@ Phase 2 — Q&A adapter
 
 Phase 3 — Merge + release
   merge_adapters.py → Unsloth save_pretrained_gguf
-  → gemma4gr-e4b-v2-q4_k_m.gguf  [HuggingFace: Efso/gemma-4-E4B-it-GR-v2]
+  → gemma-4-e4b-it-gr-v2-Q4_K_M.gguf  [HuggingFace: Efso/gemma-4-E4B-it-GR-v2]
 ```
 
 Full pipeline table: [CLAUDE.md](CLAUDE.md)

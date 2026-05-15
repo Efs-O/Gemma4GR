@@ -42,9 +42,9 @@ The two adapters are merged sequentially into a single GGUF model, ready to drop
 
 | File | Format | Size | Use |
 |---|---|---|---|
-| `gemma4gr-e4b-v2-q4_k_m.gguf` | GGUF Q4_K_M | 5.0 GB | Primary inference |
-| `gemma4gr-e4b-v2-q8_0.gguf` | GGUF Q8_0 | 7.5 GB | Higher precision inference |
-| `gemma4gr-e4b-v2-mmproj.gguf` | GGUF F16 | 945 MB | Vision/audio projection |
+| `gemma-4-e4b-it-gr-v2-Q4_K_M.gguf` | GGUF Q4_K_M | 5.0 GB | Primary inference |
+| `gemma-4-e4b-it-gr-v2-Q8_0.gguf` | GGUF Q8_0 | 7.5 GB | Higher precision inference |
+| `gemma-4-e4b-it-gr-v2-mmproj.gguf` | GGUF F16 | 945 MB | Vision/audio projection |
 
 ---
 

@@ -509,7 +509,7 @@ def guess_finetuned_paths(model_tag: str) -> list[Path]:
 def default_mmproj_path(model_key: str) -> str:
     mapping = {
         "base_e4b": Path(r"N:\GEMMA GGUF UNSLOTH\E4B\mmproj-F16.gguf"),
-        "ft_e4b": Path(r"N:\.cache\huggingface\hub\gemma-4-E4B-it-GR-v2\gemma4gr-e4b-v2-mmproj.gguf"),
+        "ft_e4b": Path(r"N:\.cache\huggingface\hub\gemma-4-E4B-it-GR-v2\gemma-4-e4b-it-gr-v2-mmproj.gguf"),
     }
     path = mapping.get(model_key)
     return str(path) if path is not None else ""
@@ -518,7 +518,7 @@ def default_mmproj_path(model_key: str) -> str:
 def default_model_specs() -> list[ModelSpec]:
     base_e4b = Path(r"N:\GEMMA GGUF UNSLOTH\E4B\gemma-4-E4B-it-UD-Q4_K_XL.gguf")
     ft_e4b = find_first_existing(
-        [Path(r"N:\.cache\huggingface\hub\gemma-4-E4B-it-GR-v2\gemma4gr-e4b-v2-q4_k_m.gguf")] + guess_finetuned_paths("e4b")
+        [Path(r"N:\.cache\huggingface\hub\gemma-4-E4B-it-GR-v2\gemma-4-e4b-it-gr-v2-Q4_K_M.gguf")] + guess_finetuned_paths("e4b")
     )
     return [
         ModelSpec("base_e4b", "Base E4B Q4_K_XL", str(base_e4b), default_mmproj_path("base_e4b"), "gemma"),
