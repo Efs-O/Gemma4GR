@@ -1,0 +1,6 @@
+This model is a fine-tune of Google's Gemma 4 and is governed by the Gemma Terms of Use.
+
+Full terms: https://ai.google.dev/gemma/terms
+
+The JOY Greek voice (Piper TTS) used to generate synthetic STT training data
+is separately licensed under CC BY-NC 4.0 by Chara Kaltsou / Gemma4GR project.

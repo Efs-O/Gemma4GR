@@ -1,0 +1,219 @@
+{
+  "model": "ollama_after_qwen_ping",
+  "score_pct": 9.5,
+  "passed": 2,
+  "total": 21,
+  "results": [
+    {
+      "category": "factual",
+      "question": "Ποια είναι η πρωτεύουσα της Ελλάδας;",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": [
+        "Αθήνα"
+      ],
+      "passed": false
+    },
+    {
+      "category": "factual",
+      "question": "Πόσες μέρες έχει μια εβδομάδα;",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": [
+        "επτά",
+        "7"
+      ],
+      "passed": false
+    },
+    {
+      "category": "factual",
+      "question": "Ποιος έγραψε την Ιλιάδα;",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": [
+        "Όμηρ",
+        "Ομηρ"
+      ],
+      "passed": false
+    },
+    {
+      "category": "factual",
+      "question": "Ποιο είναι το μεγαλύτερο νησί της Ελλάδας;",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": [
+        "Κρήτη"
+      ],
+      "passed": false
+    },
+    {
+      "category": "factual",
+      "question": "Ποιος ήταν ο Σωκράτης;",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": [
+        "φιλόσοφ",
+        "Αθήν"
+      ],
+      "passed": false
+    },
+    {
+      "category": "numbers",
+      "question": "Πες μου τον αριθμό 1234 με γράμματα.",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": [
+        "χίλια",
+        "διακό"
+      ],
+      "passed": false
+    },
+    {
+      "category": "numbers",
+      "question": "Πόσο κάνει πέντε επί έξι;",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": [
+        "τριάντα",
+        "30"
+      ],
+      "passed": false
+    },
+    {
+      "category": "numbers",
+      "question": "Ποια χρονολογία είναι εκατό χρόνια μετά το 1900;",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": [
+        "2000",
+        "δύο χιλ"
+      ],
+      "passed": false
+    },
+    {
+      "category": "grammar",
+      "question": "Γράψε μία πρόταση στον παρακείμενο χρόνο με το ρήμα 'τρώω'.",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": [
+        "έχω φάει",
+        "έχεις φάει",
+        "έφαγ"
+      ],
+      "passed": false
+    },
+    {
+      "category": "grammar",
+      "question": "Ποια είναι η πληθυντική του 'σπίτι';",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": [
+        "σπίτια"
+      ],
+      "passed": false
+    },
+    {
+      "category": "grammar",
+      "question": "Κλίνε το άρθρο 'ο' στη γενική πτώση.",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": [
+        "του"
+      ],
+      "passed": false
+    },
+    {
+      "category": "translation",
+      "question": "Μετέφρασε στα αγγλικά: 'Καλημέρα'",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": [
+        "Good morning"
+      ],
+      "passed": false
+    },
+    {
+      "category": "translation",
+      "question": "Μετέφρασε στα ελληνικά: 'Thank you very much'",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": [
+        "Ευχαριστώ",
+        "ευχαριστώ"
+      ],
+      "passed": false
+    },
+    {
+      "category": "translation",
+      "question": "Τι σημαίνει 'φιλοξενία' στα αγγλικά;",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": [
+        "hospitality",
+        "welcom"
+      ],
+      "passed": false
+    },
+    {
+      "category": "culture",
+      "question": "Τι είναι το μουσακά;",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": [
+        "φαγητ",
+        "μελιτζ",
+        "κιμά"
+      ],
+      "passed": false
+    },
+    {
+      "category": "culture",
+      "question": "Πότε γιορτάζεται η Εθνική Επέτειος στην Ελλάδα;",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": [
+        "25",
+        "Μαρτί"
+      ],
+      "passed": false
+    },
+    {
+      "category": "culture",
+      "question": "Τι είναι η δημοκρατία;",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": [
+        "λαό",
+        "κυβέρν",
+        "εξουσ"
+      ],
+      "passed": false
+    },
+    {
+      "category": "instruction",
+      "question": "Γράψε μία συνταγή για τζατζίκι.",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": [
+        "γιαούρτ",
+        "αγγούρ",
+        "σκόρδ"
+      ],
+      "passed": false
+    },
+    {
+      "category": "instruction",
+      "question": "Δώσε μου τρεις λόγους να επισκεφτώ την Ελλάδα.",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": [
+        "ιστορ",
+        "θάλασσ",
+        "κουζίν",
+        "νησ",
+        "πολιτισμ"
+      ],
+      "passed": false
+    },
+    {
+      "category": "dialect",
+      "question": "Τι σημαίνει 'ρε' στα ελληνικά;",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": null,
+      "passed": true
+    },
+    {
+      "category": "dialect",
+      "question": "Τι σημαίνει 'γεια' στα ελληνικά;",
+      "answer": "[ERROR: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8080): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))]",
+      "must_contain": [
+        "χαιρετισμ",
+        "hello",
+        "hi",
+        "υγεία"
+      ],
+      "passed": true
+    }
+  ]
+}

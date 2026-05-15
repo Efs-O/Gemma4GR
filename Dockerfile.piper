@@ -17,6 +17,7 @@ RUN cmake -Bbuild -DCMAKE_INSTALL_PREFIX=install \
 
 # setup.py expects lib/Linux-<arch>/onnxruntime and espeak-ng/build; MANIFEST expects
 # piper_phonemize/libtashkeel_model.ort and piper_phonemize/espeak-ng-data/.
+# linux/amd64 here means x86_64 (Intel *or* AMD CPUs). ARM64 hosts need Linux-aarch64 onnx + paths.
 RUN set -eux; \
     ONNX_PRE="onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}"; \
     test -d "lib/${ONNX_PRE}"; \
@@ -29,13 +30,36 @@ RUN set -eux; \
 
 WORKDIR /app
 COPY models/piper-src/src/python /app/piper-train-src
+# Upstream __init__ imports .monotonic_align.core; setuptools outputs under a nested piper_train/... path from this cwd.
+RUN python -c "from pathlib import Path; p=Path('/app/piper-train-src/piper_train/vits/monotonic_align/__init__.py'); t=p.read_text(); p.write_text(t.replace('from .monotonic_align.core import', 'from .core import'))"
+RUN cd /app/piper-train-src/piper_train/vits/monotonic_align \
+    && pip install --no-cache-dir cython numpy \
+    && mkdir -p piper_train/vits/monotonic_align \
+    && python setup.py build_ext --inplace \
+    && sh -c 'mv piper_train/vits/monotonic_align/core.*.so . 2>/dev/null || true' \
+    && rm -rf piper_train
 RUN pip install --no-deps /app/piper-train-src \
     && pip install \
-        'pytorch-lightning>=2,<3' \
+        'pytorch-lightning>=1.7,<2' \
         'librosa>=0.9.2,<1' \
         numpy \
         onnxruntime \
         'cython>=0.29.0,<1' \
-    && pip install /app/piper-phonemize-src
+    && pip install /app/piper-phonemize-src \
+    && SO="$(ls /app/piper-train-src/piper_train/vits/monotonic_align/core.cpython-*-linux-gnu.so | head -1)" \
+    && test -f "$SO" \
+    && DEST="$(python -c 'import pathlib, piper_train; print(pathlib.Path(piper_train.__path__[0]) / "vits" / "monotonic_align")')" \
+    && cp -a "$SO" "$DEST/"
+
+# train_piper.py bind-mounts host git checkouts over /app/piper-phonemize-src, which would hide
+# ONNX + espeak libs from the image. Copy them to /opt so LD_LIBRARY_PATH stays valid at runtime.
+RUN mkdir -p /opt/piper-phonem-deps/lib \
+    && cp -a /app/piper-phonemize-src/lib/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}/lib/libonnxruntime.so* /opt/piper-phonem-deps/lib/ \
+    && cp -a /app/piper-phonemize-src/build/ei/lib/libespeak-ng.so* /opt/piper-phonem-deps/lib/ \
+    && ldconfig
+
+ENV LD_LIBRARY_PATH=/opt/piper-phonem-deps/lib:${LD_LIBRARY_PATH}
+# Torch 2.6 defaults torch.load(weights_only=True); Piper .ckpt resume needs legacy unpickle (trusted local checkpoint).
+ENV TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 
 WORKDIR /app

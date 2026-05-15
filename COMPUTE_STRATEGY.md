@@ -67,7 +67,7 @@ Not used for: E4B training, full Piper training run.
 ```
 Step 1 — Local smoke tests (free, ~1h total)
   a. 20-sample Piper test: verify Docker + NVIDIA + dataset format + measure steps/sec
-  b. 50-sample Gemma E2B test: verify Unsloth loads, VRAM ceiling, dataset format
+  b. 200-pair Gemma E2B test: verify cache resolution, VRAM ceiling, dataset format, and one bounded train step
 
 Step 2 — Vast.ai Piper (after smoke test passes)
   Gate: $0.10 dry-run (20 samples, 1 epoch) on cheapest available GPU
@@ -136,16 +136,24 @@ python training/train_piper.py
 
 **Go/no-go:** If this fails, fix it here before spending anything on Vast.ai. The same failure will happen there.
 
-### 6.2 Local Gemma E2B test — 50 samples (required before full E2B run)
+### 6.2 Local Gemma E2B test — 200 pairs (required before full E2B run)
 
-**Goal:** Confirm Unsloth loads E2B, no OOM, dataset format correct.
+**Goal:** Confirm Unsloth loads E2B from shared cache, no OOM, dataset format correct, and both text and audio-QA trainers can execute.
 
 ```bash
-# Take first 50 lines of data/train_qa.jsonl → data/train_qa_test.jsonl
-# Set EPOCHS=1, point TRAIN_DATA at test file
+# Build a 200-pair smoke corpus and prepare train/val JSONL
+# Then run bounded 1-step smoke tests for:
+# - training/train_qa_local.py
+# - training/train_stt_qa_local.py
+# Watch VRAM and keep max_steps=1 for the first pass
 python training/train_qa_local.py
-# Watch nvidia-smi: peak VRAM should stay under 14 GB
+python training/train_stt_qa_local.py
 ```
+
+Notes:
+- Gemma smoke runs are native Windows runs, not Docker runs.
+- Docker parity matters for Piper only.
+- Exported metrics should be kept from `metrics_history.json` / `metrics_history.csv` before scaling the run up.
 
 ### 6.3 Vast.ai dry-run — $0.10 gate
 
@@ -199,5 +207,17 @@ Need to merge adapters or run Piper synthesis?
 ```
 
 ---
+
+## 9. Current Smoke Notes
+
+- The stronger validated Gemma smoke path is `200` pairs, not only the earlier `50`-sample text check.
+- Text smoke: `prepare_qa_dataset.py` → `train_qa_local.py`
+- Audio-Q&A smoke: `synthesize_qa_audio.py` → `prepare_stt_qa_dataset.py` → `train_stt_qa_local.py`
+- The local smoke run now validates:
+- base model resolution from `N:\.cache`
+- JOY question-audio synthesis
+- multimodal JSONL formatting
+- one-step E2B audio-Q&A training
+- Gemma smoke fixes should prefer repo-script patches over package upgrades or downgrades so the already-working Piper path is not destabilized.
 
 *Canonical pipeline sequence: `PIPER_REPLACES_MOIRA_PLAN.md`. Update this document when hardware or budget decisions change.*

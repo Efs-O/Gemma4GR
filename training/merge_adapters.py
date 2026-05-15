@@ -327,12 +327,14 @@ def merge() -> int:
     }
 
     try:
-        from unsloth import FastModel
+        from unsloth import FastModel, FastVisionModel
 
         # Step 1: load base + STT adapter (Unsloth native — handles ClippableLinear)
+        # STT adapter was trained with FastVisionModel — must use it here so that
+        # vision-specific params (layer_scalar etc.) are included in the device map.
         if status["stt_adapter"] and not MERGE_SKIP_STT:
             print(f"\n[1/3] Loading base model + STT adapter via Unsloth ...")
-            model, processor = load_with_unsloth(FastModel, str(STT_ADAPTER))
+            model, processor = load_with_unsloth(FastVisionModel, str(STT_ADAPTER))
             tokenizer = get_tokenizer(processor)
             print("  STT adapter loaded and active.")
         else:

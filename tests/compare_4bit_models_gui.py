@@ -137,12 +137,14 @@ GREEK_STOPWORDS = {
     "στοι",
 }
 
-QA_PAIRS_PER_CATEGORY = 4
+QA_PAIRS_PER_CATEGORY = 1
 EVAL_RANDOM_SEED = 42
-VOICE_CASES_PER_CATEGORY = 4
+VOICE_CASES_PER_CATEGORY = 1
 DEFAULT_QA_PAIRS = BASE / "data" / "qa_pairs.jsonl"
 DEFAULT_VOICE_SENTENCES = BASE / "data" / "voice_sentences.jsonl"
 VOICE_WAVS_DIR = BASE / "data" / "human_voice_dataset" / "wavs"
+CURATED_TEXT_CASES = BASE / "data" / "eval_curated" / "text_cases.jsonl"
+CURATED_AUDIO_CASES = BASE / "data" / "eval_curated" / "audio_cases.jsonl"
 OLLAMA_JUDGE_URL = "http://localhost:11434/api/chat"
 OLLAMA_JUDGE_MODEL = os.getenv("OLLAMA_JUDGE_MODEL", "qwen3.5:397b-cloud")
 JUDGE_TIMEOUT = 120  # qwen3.5 thinking phase consumes ~500 tokens before emitting the verdict
@@ -352,6 +354,44 @@ def load_audio_cases_from_stt_metadata(
     return cases
 
 
+def load_text_cases_from_curated(path: Path = CURATED_TEXT_CASES) -> list[dict]:
+    cases = []
+    with path.open("r", encoding="utf-8") as fh:
+        for i, line in enumerate(fh, 1):
+            line = line.strip()
+            if not line:
+                continue
+            item = json.loads(line)
+            cases.append({
+                "id": f"text_{item.get('category', 'unk')}_{i}",
+                "category": item.get("category", "unknown"),
+                "question": item["question"].strip(),
+                "reference_answer": item["answer"].strip(),
+            })
+    return cases
+
+
+def load_audio_cases_from_curated(path: Path = CURATED_AUDIO_CASES) -> list[dict]:
+    cases = []
+    with path.open("r", encoding="utf-8") as fh:
+        for i, line in enumerate(fh, 1):
+            line = line.strip()
+            if not line:
+                continue
+            item = json.loads(line)
+            wav = Path(item["wav_path"])
+            if not wav.exists():
+                continue
+            cases.append({
+                "id": f"audio_{item.get('category', 'unk')}_{i}",
+                "category": item.get("category", "unknown"),
+                "question": item["text"].strip(),
+                "reference_answer": item["text"].strip(),
+                "wav_path": str(wav),
+            })
+    return cases
+
+
 def judge_answer(question: str, reference: str, answer: str) -> float | None:
     if SKIP_JUDGE:
         return None
@@ -469,7 +509,7 @@ def guess_finetuned_paths(model_tag: str) -> list[Path]:
 def default_mmproj_path(model_key: str) -> str:
     mapping = {
         "base_e4b": Path(r"N:\GEMMA GGUF UNSLOTH\E4B\mmproj-F16.gguf"),
-        "ft_e4b": Path(r"N:\.cache\huggingface\hub\gemma-4-E4B-it-GR-stt\gemma4gr-e4b-stt-mmproj.gguf"),
+        "ft_e4b": Path(r"N:\.cache\huggingface\hub\gemma-4-E4B-it-GR-v2\gemma4gr-e4b-v2-mmproj.gguf"),
     }
     path = mapping.get(model_key)
     return str(path) if path is not None else ""
@@ -478,13 +518,13 @@ def default_mmproj_path(model_key: str) -> str:
 def default_model_specs() -> list[ModelSpec]:
     base_e4b = Path(r"N:\GEMMA GGUF UNSLOTH\E4B\gemma-4-E4B-it-UD-Q4_K_XL.gguf")
     ft_e4b = find_first_existing(
-        [Path(r"N:\.cache\huggingface\hub\gemma-4-E4B-it-GR-stt\gemma4gr-e4b-stt-q4_k_m.gguf")] + guess_finetuned_paths("e4b")
+        [Path(r"N:\.cache\huggingface\hub\gemma-4-E4B-it-GR-v2\gemma4gr-e4b-v2-q4_k_m.gguf")] + guess_finetuned_paths("e4b")
     )
     return [
         ModelSpec("base_e4b", "Base E4B Q4_K_XL", str(base_e4b), default_mmproj_path("base_e4b"), "gemma"),
         ModelSpec(
             "ft_e4b",
-            "STT-only E4B (GR)",
+            "Fine-tuned E4B v2 (STT+QA)",
             ft_e4b,
             default_mmproj_path("ft_e4b"),
             str(Path(r"N:\Gemma4GR\gemma-4-E4B-it-GR\chat_template.jinja")),
@@ -699,6 +739,7 @@ class Compare4BitApp:
         self.play_audio_var = tk.BooleanVar(value=True)
         self.stt_only_var = tk.BooleanVar(value=False)
         self.seed_var = tk.StringVar(value=str(EVAL_RANDOM_SEED))
+        self.cases_per_cat_var = tk.StringVar(value=str(QA_PAIRS_PER_CATEGORY))
         self.force_builtin_gemma_template_var = tk.BooleanVar(value=False)
         self.use_shared_test_template_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="Ready.")
@@ -802,6 +843,8 @@ class Compare4BitApp:
         ).grid(row=6, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         ttk.Label(config_frame, text="Sample seed").grid(row=3, column=2, sticky="w", padx=6, pady=4)
         ttk.Entry(config_frame, textvariable=self.seed_var, width=8).grid(row=3, column=3, sticky="w", padx=6, pady=4)
+        ttk.Label(config_frame, text="Cases/cat").grid(row=3, column=4, sticky="w", padx=6, pady=4)
+        ttk.Spinbox(config_frame, textvariable=self.cases_per_cat_var, from_=1, to=10, width=4).grid(row=3, column=5, sticky="w", padx=6, pady=4)
         ttk.Label(
             config_frame,
             text="Run size: 2 models × (4/cat text + 4/cat audio)  |  judge: Ollama qwen3.5",
@@ -998,6 +1041,10 @@ class Compare4BitApp:
         except ValueError:
             messagebox.showerror("Comparison", "Sample seed must be an integer.")
             return
+        try:
+            cases_per_cat = max(1, int(self.cases_per_cat_var.get().strip()))
+        except ValueError:
+            cases_per_cat = QA_PAIRS_PER_CATEGORY
 
         self.stop_requested.clear()
         self.last_audio_path = None
@@ -1018,6 +1065,7 @@ class Compare4BitApp:
                 self.play_audio_var.get(),
                 self.stt_only_var.get(),
                 seed,
+                cases_per_cat,
             ),
             daemon=True,
         )
@@ -1098,15 +1146,29 @@ class Compare4BitApp:
         play_audio: bool,
         stt_only: bool = False,
         seed: int = EVAL_RANDOM_SEED,
+        cases_per_cat: int = QA_PAIRS_PER_CATEGORY,
     ) -> None:
         server_handle: ServerHandle | None = None
         results: list[CaseResult] = []
         try:
-            text_cases = [] if stt_only else load_text_cases_from_qa_pairs(qa_pairs_path, seed=seed)
+            if not stt_only:
+                if CURATED_TEXT_CASES.exists():
+                    text_cases = load_text_cases_from_curated(CURATED_TEXT_CASES)
+                    self.event_queue.put(("log", f"[RUN] Curated text cases: {CURATED_TEXT_CASES} ({len(text_cases)} cases)"))
+                else:
+                    text_cases = load_text_cases_from_qa_pairs(qa_pairs_path, n_per_category=cases_per_cat, seed=seed)
+                    self.event_queue.put(("log", f"[RUN] QA pairs: {qa_pairs_path} ({len(text_cases)} text cases)"))
+            else:
+                text_cases = []
             if audio_mode == "stt_transcription":
                 audio_cases = load_audio_cases_from_stt_metadata(stt_metadata_path, VOICE_WAVS_DIR)
+                self.event_queue.put(("log", f"[RUN] STT metadata: {stt_metadata_path} ({len(audio_cases)} audio cases)"))
+            elif CURATED_AUDIO_CASES.exists():
+                audio_cases = load_audio_cases_from_curated(CURATED_AUDIO_CASES)
+                self.event_queue.put(("log", f"[RUN] Curated audio cases: {CURATED_AUDIO_CASES} ({len(audio_cases)} cases)"))
             else:
-                audio_cases = load_audio_cases_from_voice_sentences(voice_sentences_path, VOICE_WAVS_DIR, seed=seed)
+                audio_cases = load_audio_cases_from_voice_sentences(voice_sentences_path, VOICE_WAVS_DIR, n_per_category=cases_per_cat, seed=seed)
+                self.event_queue.put(("log", f"[RUN] Voice sentences: {voice_sentences_path} ({len(audio_cases)} audio cases)"))
             run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             run_dir = RESULTS_ROOT / run_stamp
             run_dir.mkdir(parents=True, exist_ok=True)
@@ -1114,12 +1176,6 @@ class Compare4BitApp:
             self.run_log_path = run_log_path
             total_cases = len(specs) * (len(text_cases) + len(audio_cases))
             completed = 0
-
-            self.event_queue.put(("log", f"[RUN] QA pairs: {qa_pairs_path} ({len(text_cases)} text cases)"))
-            if audio_mode == "stt_transcription":
-                self.event_queue.put(("log", f"[RUN] STT metadata: {stt_metadata_path} ({len(audio_cases)} audio cases)"))
-            else:
-                self.event_queue.put(("log", f"[RUN] Voice sentences: {voice_sentences_path} ({len(audio_cases)} audio cases)"))
             self.event_queue.put(("log", f"[RUN] Audio mode: {audio_mode}"))
             self.event_queue.put(("log", f"[RUN] Results dir: {run_dir}"))
             self.event_queue.put(("log", f"[RUN] Judge model: {OLLAMA_JUDGE_MODEL}"))

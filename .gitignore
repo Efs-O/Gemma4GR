@@ -42,6 +42,43 @@ build/
 .DS_Store
 Thumbs.db
 
+# Session / planning notes (local only)
+SESSION_REPORT_*.md
+EVALUATION_REPORT*.md
+EVAL_REPORT*.md
+FINAL_STT_RUN_PLAN.md
+NEXT_RUN_FIXES.md
+UI_GAP_CLOSURE_PLAN.md
+VAST_PIPER_REMOTE_RUNBOOK.md
+WER_CER_IMPL_PLAN.md
+PIPER_DOCKER_FIXES.md
+PUBLIC_RELEASE_SCOPE.md
+RELEASE_PLAN.md
+GEMMA4KIDS_SYSTEM_PROMPTS.md
+
+# One-off data fix / viewer scripts (not part of reproducible pipeline)
+data/fix_contamination.py
+data/fix_e4b_self_refine_qa_pairs.py
+data/fix_qa_audio_manifest_flagged.py
+data/clean_e4b_qa.py
+data/generate_viewer.py
+data/viewer_server.py
+
+# Session data artefacts (local only)
+data/audit_qa_20260513/
+data/legacy_final_sequence_cleanup_20260513/
+data/qa_review/
+data/qa_fix_verify.txt
+data/qa_full_review.txt
+data/qa_noise_sample.txt
+data/qa_quality_sample.txt
+data/qa_remaining_noise.txt
+data/qa_tsoureki_hits.txt
+data/contaminated_qa.txt
+data/contaminated_stt.txt
+data/training_viewer.html
+data/transcripts/
+
 # Python virtual envs (all flavors used in this project)
 .venv311/
 
