@@ -183,6 +183,9 @@ def main(argv=None):
             load_best_model_at_end=cfg.get("load_best_model_at_end", False), optim=cfg["optimizer"], lr_scheduler_type=cfg["scheduler"], warmup_steps=cfg["warmup_steps"],
             weight_decay=cfg["weight_decay"], logging_steps=cfg["logging_steps"], eos_token="<turn|>",
             bf16=torch.cuda.is_bf16_supported(), fp16=not torch.cuda.is_bf16_supported(),
+            # SFTTrainer init clears the decoder layers' checkpointing flags; with this set, train() re-enables them
+            # (non-reentrant, as Unsloth's Gemma 4 shared-KV patch requires). Off: 21 GB peak on the longest row;
+            # on: 12.9 GB with identical losses (G6 mem_probe4 / preflight 10).
             gradient_checkpointing=True, gradient_checkpointing_kwargs={"use_reentrant": False},
             report_to="none", remove_unused_columns=False))
     print("pre-mask columns:", trainer.train_dataset.column_names, "ids tail:", trainer.train_dataset[0]["input_ids"][-5:],
