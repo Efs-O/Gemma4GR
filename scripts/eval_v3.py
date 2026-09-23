@@ -124,6 +124,12 @@ def _load(path):
     return [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def request_payload(messages: list[dict], set_name: str) -> dict:
+    return {"model": "local", "messages": messages, "temperature": 0, "top_p": 1, "seed": 42,
+            "max_tokens": 256 if set_name == "audio" else 512,
+            "chat_template_kwargs": {"enable_thinking": False}, "cache_prompt": False}
+
+
 def completed_cases(path: Path) -> set[tuple[str, str]]:
     if not path.exists(): return set()
     return {(r["run_key"], str(r["case_id"])) for r in _load(path)}
@@ -148,7 +154,7 @@ def run(run_key: str, model: Path, mmproj: Path, set_name: str, start: int = 0, 
                 reference = case["reference"]
                 aud = audio_bytes(ROOT / case["audio_path"], case["audio_sha256"])
                 messages = [{"role": "user", "content": [{"type": "text", "text": case["prompt"]}, {"type": "input_audio", "input_audio": {"data": aud, "format": "wav"}}]}]
-            payload = {"model": "local", "messages": messages, "temperature": 0, "top_p": 1, "seed": 42, "max_tokens": 256 if set_name == "audio" else 512, "chat_template_kwargs": {"enable_thinking": False}}
+            payload = request_payload(messages, set_name)
             body = json.dumps(payload).encode()
             t0 = time.perf_counter()
             req = urllib.request.Request(f"http://127.0.0.1:{port}/v1/chat/completions", body, {"Content-Type": "application/json"})
@@ -156,7 +162,7 @@ def run(run_key: str, model: Path, mmproj: Path, set_name: str, start: int = 0, 
             latency = time.perf_counter() - t0
             answer = response["choices"][0]["message"]["content"] or ""
             finish = response["choices"][0].get("finish_reason")
-            row = {"run_key": run_key, "case_id": cid, "prompt_sha256": hashlib.sha256(json.dumps(messages, ensure_ascii=False, sort_keys=True).encode()).hexdigest(), "answer": answer, "finish_reason": finish, "latency_s": latency, "metrics": metrics(answer, reference), "stop_failure": finish != "stop", "server_command": f'"{ROOT / "private/tools/llama.cpp-b11095/llama-server.exe"}" -m "{model}" --mmproj "{mmproj}" -c 4096 -ngl 99 --seed 42 --jinja'}
+            row = {"run_key": run_key, "case_id": cid, "prompt_sha256": hashlib.sha256(json.dumps(messages, ensure_ascii=False, sort_keys=True).encode()).hexdigest(), "answer": answer, "finish_reason": finish, "latency_s": latency, "metrics": metrics(answer, reference), "stop_failure": finish != "stop", "cache_prompt": False, "slots": 1, "server_command": f'"{ROOT / "private/tools/llama.cpp-b11095/llama-server.exe"}" -m "{model}" --mmproj "{mmproj}" -c 4096 -ngl 99 --seed 42 --jinja -np 1'}
             if set_name == "audio":
                 norm = lambda s: re.sub(r"[^\w\s]", "", unicodedata.normalize("NFC", s).lower()).split()
                 hyp, ref = norm(answer), norm(reference)

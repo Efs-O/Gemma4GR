@@ -20,6 +20,10 @@ class MetricsTests(unittest.TestCase):
 
 
 class ParsingAndAudioTests(unittest.TestCase):
+    def test_payload_disables_prompt_cache(self):
+        payload = ev.request_payload([{"role": "user", "content": "Γεια"}], "text")
+        self.assertIs(payload["cache_prompt"], False)
+
     def test_resume_skip_keys(self):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "done.jsonl"
