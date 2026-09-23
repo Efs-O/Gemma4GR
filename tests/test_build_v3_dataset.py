@@ -47,6 +47,15 @@ class BuildDatasetTests(unittest.TestCase):
         self.assertTrue(near(a, c))
         self.assertTrue(shingles("abcdef"))
 
+    def test_near_uses_shingle_set_bound_not_string_length(self):
+        sentence = "Η πολιτισμική κληρονομιά διατηρείται μέσα στους αιώνες."
+        a = {"user": "Ποια κληρονομιά;", "answer": sentence}
+        b = {"user": "Ποια κληρονομιά;", "answer": (sentence + " ") * 2}
+        self.assertGreater(len(b["answer"]), len(a["answer"]) * 1.15)
+        self.assertGreaterEqual(len(shingles(norm(a["user"] + " " + a["answer"])) & shingles(norm(b["user"] + " " + b["answer"]))) /
+                                len(shingles(norm(a["user"] + " " + a["answer"])) | shingles(norm(b["user"] + " " + b["answer"]))), .85)
+        self.assertTrue(near(a, b))
+
     def test_jsonl_byte_stability(self):
         from scripts.build_v3_dataset import write
         with tempfile.TemporaryDirectory() as d:
@@ -59,5 +68,4 @@ class BuildDatasetTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
 

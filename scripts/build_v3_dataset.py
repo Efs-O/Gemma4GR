@@ -24,8 +24,22 @@ def row(line,i):
 def shingles(s): return {s[i:i+5] for i in range(max(0,len(s)-4))}
 def near(a,b):
  sa=norm(a['user']+' '+a['answer']); sb=norm(b['user']+' '+b['answer'])
- if min(len(sa),len(sb)) < .85*max(len(sa),len(sb)): return False
- x=shingles(sa);y=shingles(sb);return bool(x or y) and len(x&y)/len(x|y)>=.85
+ x=shingles(sa);y=shingles(sb)
+ if not x or not y:return False
+ if min(len(x),len(y))/max(len(x),len(y)) < .85:return False
+ return len(x&y)/len(x|y)>=.85
+def signature(r): return shingles(norm(r['user']+' '+r['answer']))
+def indexed_near(r,candidates,index):
+ sx=signature(r)
+ if not sx:return False
+ # With Jaccard >= .85, and the exact |A|/|B| >= .85 bound, fewer
+ # than 15% of either set can be absent from the intersection. Probe
+ # slightly more than that many rare shingles to retain every true match.
+ probe=sorted(sx,key=lambda sh:(len(index.get(sh,())),sh))[:max(1,int(.16*len(sx))+1)]
+ ids=set().union(*(index.get(sh,set()) for sh in probe))
+ return any(near(r,candidates[i]) for i in sorted(ids))
+def index_add(r,i,index):
+ for sh in signature(r):index[sh].add(i)
 def fp(r): return norm(r['user'])+'\0'+norm(r['answer'])
 def read(p): return p.read_bytes().decode('utf-8-sig').splitlines()
 def write(p,rs):
@@ -74,11 +88,11 @@ def main():
   for r in pool:
    if r['answer'].rstrip() and r['answer'].rstrip()[-1] not in TERMINAL and len(tok.encode(r['text']).ids)>=cutoff:drops[src]['empty_or_truncated'].append(r['id']);continue
    keep.append(r)
-  seen=set();ded=[]
+  seen=set();ded=[];near_index=defaultdict(set)
   for r in keep:
    if fp(r) in seen:drops[src]['exact_dup'].append(r['id']);continue
-   if any(near(r,x) for x in ded if norm(r['user'])==norm(x['user'])):drops[src]['near_dup'].append(r['id']);continue
-   seen.add(fp(r));ded.append(r)
+   if indexed_near(r,ded,near_index):drops[src]['near_dup'].append(r['id']);continue
+   seen.add(fp(r));ded.append(r);index_add(r,len(ded)-1,near_index)
   return ded
  train=process('train',paths['train']); vp=process('val',paths['val']); combined=process('combined',paths['combined'])
  def overlap(a,b):
@@ -95,19 +109,24 @@ def main():
  def reread(p):return [row(x,i) for i,x in enumerate(read(p),1)]
  proof={'train_val':len(overlap(reread(out/'train.jsonl'),reread(out/'val.jsonl'))),'train_eval':len(overlap(reread(out/'train.jsonl'),reread(out/'eval/text_eval.jsonl'))),'val_eval':len(overlap(reread(out/'val.jsonl'),reread(out/'eval/text_eval.jsonl')))}
  trainfp={fp(x) for x in train}; voice=[x for x in combined if fp(x) not in trainfp];pc=Counter(norm(x['user']) for x in voice);used=Counter();cand=[]
+ reference=train+val+ev;ref_index=defaultdict(set)
+ for i,y in enumerate(reference):index_add(y,i,ref_index)
+ cand_index=defaultdict(set)
  for x in voice:
   p=norm(x['user'])
-  if used[p]>=10 or any(near(x,y) for y in train+val+ev if norm(x['user'])==norm(y['user'])):continue
-  used[p]+=1;cand.append(info(x))
+  if used[p]>=10 or indexed_near(x,reference,ref_index) or indexed_near(x,[{'user':z['user'],'answer':z['answer']} for z in cand],cand_index):continue
+  used[p]+=1;cand.append(x);index_add(x,len(cand)-1,cand_index)
   if len(cand)==300:break
- write(out/'candidates_voice_dedup.jsonl',cand)
+ write(out/'candidates_voice_dedup.jsonl',[info(x) for x in cand])
  # Audio fallback with available files and train overlap check.
  apath=ROOT/'data/val_stt_final.jsonl'; stpath=ROOT/'data/train_stt_final.jsonl'; raw=read(apath);tr=read(stpath); trainaudio=set();traintext=set()
+ trainbases=set()
  for line in tr:
   try:
    for m in json.loads(line).get('messages',[]):
     for c in m.get('content',[]) if isinstance(m.get('content'),list) else []:
-     if c.get('type')=='audio':trainaudio.add(c.get('audio',''))
+     if c.get('type')=='audio':
+      trainbases.add(Path(c.get('audio','')).name.casefold())
      if c.get('type')=='text' and m.get('role')=='assistant':traintext.add(norm(c.get('text','')))
   except Exception:pass
  aud=[];missing=[]
@@ -116,17 +135,35 @@ def main():
   except Exception:continue
   cont=[c for m in x.get('messages',[]) if m.get('role')=='user' for c in m.get('content',[])]; ans=[c.get('text','') for m in x.get('messages',[]) if m.get('role')=='assistant' for c in m.get('content',[]) if c.get('type')=='text']; p=next((c.get('audio') for c in cont if c.get('type')=='audio'),None);prompt=next((c.get('text') for c in cont if c.get('type')=='text'),'')
   if not p:continue
-  pp=Path(p); actual=next((q for q in [pp,ROOT/pp.name,ROOT/'data/human_voice_resampled'/pp.name] if q.is_file()),None)
+  pp=Path(p); basename=pp.name
+  actual=next((q for q in [pp,ROOT/pp,ROOT/basename,ROOT/'data/human_voice_resampled'/basename,ROOT/'data/human_voice_dataset/wavs'/basename] if q.is_file()),None)
   if actual is None:missing.append(i);continue
-  transcript=ans[-1] if ans else ''; aud.append({'id':i,'audio_path':str(actual),'audio_sha256':H(actual.read_bytes()),'transcript':transcript,'prompt':prompt,'category':x.get('category')})
- stride=max(1,len(aud)//40);aud=aud[::stride][:40];write(out/'eval/audio_eval.jsonl',aud);audio_over=[x['id'] for x in aud if x['audio_path'] in trainaudio or norm(x['transcript']) in traintext]
+  transcript=ans[-1] if ans else ''
+  import wave
+  with wave.open(str(actual),'rb') as wf:
+   rate=wf.getframerate();channels=wf.getnchannels();duration=wf.getnframes()/rate
+  aud.append({'id':i,'audio_path':actual.relative_to(ROOT).as_posix(),'audio_sha256':H(actual.read_bytes()),'sample_rate':rate,'channels':channels,'duration_s':round(duration,6),'reference':transcript,'prompt':prompt,'category':x.get('category')})
+ rng_audio=random.Random(args.seed); cats=defaultdict(list)
+ for x in aud:cats[x.get('category')].append(x)
+ if any(k is not None for k in cats):
+  chosen=[];keys=sorted(cats,key=lambda k:str(k))
+  for k in keys:rng_audio.shuffle(cats[k])
+  while len(chosen)<min(40,len(aud)):
+   progressed=False
+   for k in keys:
+    if cats[k] and len(chosen)<40:chosen.append(cats[k].pop());progressed=True
+   if not progressed:break
+  aud=chosen
+ else:
+  rng_audio.shuffle(aud);aud=aud[:40]
+ write(out/'eval/audio_eval.jsonl',aud);audio_over=[x['id'] for x in aud if Path(x['audio_path']).name.casefold() in trainbases or norm(x['reference']) in traintext]
  proof['audio_train_overlap']=len(audio_over)
  output_files=sorted(p for p in out.rglob('*') if p.is_file() and p.name!='MANIFEST.json')
  def hashrec(p):
-  b=p.read_bytes();return {'sha256_raw':H(b),'sha256_lf':H(b.replace(b'\r\n',b'\n').replace(b'\r',b'\n')),'rows':sum(1 for _ in p.open(encoding='utf-8'))}
+  b=p.read_bytes();return {'sha256_raw':H(b),'sha256_lf':H(b.replace(b'\r\n',b'\n').replace(b'\r',b'\n')),'rows':len(p.read_text(encoding='utf-8').splitlines())}
  promptcnt=Counter(norm(x['user']) for x in train); answercnt=defaultdict(set)
  for x in train:answercnt[norm(x['user'])].add(norm(x['answer']))
  dup=[(k,v,len(answercnt[k])) for k,v in promptcnt.items() if len(answercnt[k])>1]
  manifest={'seed':args.seed,'thresholds':{'latin_gt':.2,'latin_report_min':.1,'near_jaccard':.85,'max_tokens':MAX,'text_eval_target':150,'audio_target':40,'voice_max':300,'voice_per_prompt':10},'inputs':{**{k:{'path':str(p),'sha256_raw':H(p.read_bytes()),'sha256_lf':H(p.read_bytes().replace(b'\r\n',b'\n').replace(b'\r',b'\n')),'rows':len(read(p))} for k,p in paths.items()}, **{k:{'path':str(p),'sha256_raw':H(p.read_bytes()),'sha256_lf':H(p.read_bytes().replace(b'\r\n',b'\n').replace(b'\r',b'\n')),'rows':len(read(p))} for k,p in {'audio_val':ROOT/'data/val_stt_final.jsonl','audio_train_overlap_check':ROOT/'data/train_stt_final.jsonl'}.items()}},'outputs':{str(p.relative_to(out)):hashrec(p) for p in output_files},'drop_indices':{s:{r:sorted(set(ix)) for r,ix in d.items()} for s,d in drops.items()},'drop_counts':{s:{r:len(set(ix)) for r,ix in d.items()} for s,d in drops.items()},'nfc_modifications':dict(mods),'length_stats':stats,'latin_10_20_examples':mid,'whitelist_hits':dict(whitelist),'train_prompt_duplicate_count':len(dup),'train_prompt_duplicate_top20':sorted(dup,key=lambda x:-x[1])[:20],'combined_voice_rows':len(voice),'combined_voice_distinct_prompts':len(pc),'combined_voice_top20':pc.most_common(20),'audio_missing_indices':missing,'audio_train_overlap_indices':audio_over,'zero_overlap_proof':proof,'tokenizer':{'path':str(tp),'sha256':H(tp.read_bytes())},'script_git_blob_hash':subprocess.check_output(['git','hash-object','scripts/build_v3_dataset.py'],cwd=ROOT,text=True).strip(),'unmodified_rows_byte_preserved':'Original text strings retained for rows without NFC modification; output JSON is canonical JSONL.'}
- (out/'MANIFEST.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n',encoding='utf-8',newline='\n')
+ (out/'MANIFEST.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2,sort_keys=True)+'\n',encoding='utf-8',newline='\n')
 if __name__=='__main__':main()

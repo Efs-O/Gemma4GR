@@ -70,7 +70,7 @@ class GuardTests(unittest.TestCase):
                 tensor = gguf.quants.quantize(tensor, qtype)
             raw_shape = (32, 34) if qtype == gguf.GGMLQuantizationType.Q8_0 else (32, 32)
             writer.add_tensor(gname, tensor, raw_shape=raw_shape, raw_dtype=qtype)
-        writer.write_header_to_file(); writer.write_kv_data_to_file(); writer.write_tensors_to_file()
+        writer.write_header_to_file(); writer.write_kv_data_to_file(); writer.write_tensors_to_file(); writer.close()
         return Path(path)
 
     def test_tuned_gguf_passes(self):
@@ -118,11 +118,11 @@ class GuardTests(unittest.TestCase):
     def test_mmproj_stock_pass_altered_fails(self):
         stock = gguf.GGUFWriter(str(self.root / "stock.gguf"), "gemma")
         stock.add_name("Projector"); stock.add_tensor("proj.weight", np.eye(32,dtype=np.float32))
-        stock.write_header_to_file(); stock.write_kv_data_to_file(); stock.write_tensors_to_file()
+        stock.write_header_to_file(); stock.write_kv_data_to_file(); stock.write_tensors_to_file(); stock.close()
         altered = gguf.GGUFWriter(str(self.root / "altered.gguf"), "gemma")
         altered.add_name("Projector"); changed=np.eye(32,dtype=np.float32); changed[0,0]=2
         altered.add_tensor("proj.weight", changed)
-        altered.write_header_to_file(); altered.write_kv_data_to_file(); altered.write_tensors_to_file()
+        altered.write_header_to_file(); altered.write_kv_data_to_file(); altered.write_tensors_to_file(); altered.close()
         self.assertEqual(verify_mmproj(self.root / "stock.gguf", self.root / "stock.gguf", [self.adapter1])["verdict"], "PASS")
         self.assertEqual(verify_mmproj(self.root / "altered.gguf", self.root / "stock.gguf", [self.adapter1])["verdict"], "FAIL")
 
