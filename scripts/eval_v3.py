@@ -130,9 +130,30 @@ def request_payload(messages: list[dict], set_name: str) -> dict:
             "chat_template_kwargs": {"enable_thinking": False}, "cache_prompt": False}
 
 
-def completed_cases(path: Path) -> set[tuple[str, str]]:
+def run_settings(model: Path, mmproj: Path, set_name: str, port: int = 8080) -> dict:
+    server_command = f'"{ROOT / "private/tools/llama.cpp-b11095/llama-server.exe"}" -m "{model}" --mmproj "{mmproj}" -c 4096 -ngl 99 --seed 42 --jinja -np 1 --host 127.0.0.1 --port {port}'
+    return {
+        "server_command": server_command,
+        "cache_prompt": False,
+        "slots": 1,
+        "max_tokens": 256 if set_name == "audio" else 512,
+        "temperature": 0,
+        "seed": 42,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+
+
+def settings_fingerprint(settings: dict) -> str:
+    canonical = json.dumps(settings, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def completed_cases(path: Path, fingerprint: str) -> set[tuple[str, str]]:
     if not path.exists(): return set()
-    return {(r["run_key"], str(r["case_id"])) for r in _load(path)}
+    rows = _load(path)
+    if any(r.get("settings_fingerprint") != fingerprint for r in rows):
+        raise ValueError(f"stale rows from a different configuration in {path}; move them aside")
+    return {(r["run_key"], str(r["case_id"])) for r in rows}
 
 
 def run(run_key: str, model: Path, mmproj: Path, set_name: str, start: int = 0, end: int | None = None, port: int = 8080):
@@ -140,7 +161,9 @@ def run(run_key: str, model: Path, mmproj: Path, set_name: str, start: int = 0, 
     cases = cases[start:end]
     target = OUT / run_key / f"{set_name}.jsonl"
     target.parent.mkdir(parents=True, exist_ok=True)
-    done = completed_cases(target)
+    settings = run_settings(model, mmproj, set_name, port)
+    fingerprint = settings_fingerprint(settings)
+    done = completed_cases(target, fingerprint)
     with target.open("a", encoding="utf-8", newline="\n") as f:
         for case_index, case in enumerate(cases, start=start + 1):
             cid = str(case.get("id", case.get("case_id", case_index)))
@@ -162,7 +185,7 @@ def run(run_key: str, model: Path, mmproj: Path, set_name: str, start: int = 0, 
             latency = time.perf_counter() - t0
             answer = response["choices"][0]["message"]["content"] or ""
             finish = response["choices"][0].get("finish_reason")
-            row = {"run_key": run_key, "case_id": cid, "prompt_sha256": hashlib.sha256(json.dumps(messages, ensure_ascii=False, sort_keys=True).encode()).hexdigest(), "answer": answer, "finish_reason": finish, "latency_s": latency, "metrics": metrics(answer, reference), "stop_failure": finish != "stop", "cache_prompt": False, "slots": 1, "server_command": f'"{ROOT / "private/tools/llama.cpp-b11095/llama-server.exe"}" -m "{model}" --mmproj "{mmproj}" -c 4096 -ngl 99 --seed 42 --jinja -np 1'}
+            row = {"run_key": run_key, "case_id": cid, "prompt_sha256": hashlib.sha256(json.dumps(messages, ensure_ascii=False, sort_keys=True).encode()).hexdigest(), "answer": answer, "finish_reason": finish, "latency_s": latency, "metrics": metrics(answer, reference), "stop_failure": finish != "stop", "settings_fingerprint": fingerprint, "settings": settings}
             if set_name == "audio":
                 norm = lambda s: re.sub(r"[^\w\s]", "", unicodedata.normalize("NFC", s).lower()).split()
                 hyp, ref = norm(answer), norm(reference)

@@ -24,12 +24,31 @@ class ParsingAndAudioTests(unittest.TestCase):
         payload = ev.request_payload([{"role": "user", "content": "Γεια"}], "text")
         self.assertIs(payload["cache_prompt"], False)
 
-    def test_resume_skip_keys(self):
+    def test_resume_skips_matching_fingerprint(self):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "done.jsonl"
-            p.write_text(json.dumps({"run_key": "stock_q4", "case_id": "1"}) + "\n", encoding="utf-8")
-            self.assertIn(("stock_q4", "1"), ev.completed_cases(p))
-            self.assertNotIn(("v2fixed_q4", "1"), ev.completed_cases(p))
+            row = {"run_key": "stock_q4", "case_id": "1", "settings_fingerprint": "abc"}
+            p.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            self.assertIn(("stock_q4", "1"), ev.completed_cases(p, "abc"))
+
+    def test_resume_rejects_mismatching_fingerprint(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "done.jsonl"
+            row = {"run_key": "stock_q4", "case_id": "1", "settings_fingerprint": "old"}
+            p.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "stale rows from a different configuration"):
+                ev.completed_cases(p, "new")
+
+    def test_fingerprint_covers_all_run_settings(self):
+        settings = ev.run_settings(Path("model.gguf"), Path("mmproj.gguf"), "text")
+        expected = ev.settings_fingerprint(settings)
+        self.assertEqual(ev.settings_fingerprint(dict(settings)), expected)
+        for field, value in (("server_command", "other"), ("cache_prompt", True), ("slots", 2),
+                             ("max_tokens", 100), ("temperature", 0.5), ("seed", 1),
+                             ("chat_template_kwargs", {"enable_thinking": True})):
+            changed = dict(settings)
+            changed[field] = value
+            self.assertNotEqual(ev.settings_fingerprint(changed), expected)
 
     def test_system_prompt_parse(self):
         row = f"<bos><|turn>system\n{ev.SYSTEM}<turn|>\n<|turn>user\nΓεια<turn|>\n<|turn>model\nΧαίρετε<turn|>\n"
