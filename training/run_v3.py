@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -75,6 +76,27 @@ def preflight_output_dir(output: Path, stamp: str | None = None) -> Path:
     return candidate
 
 
+def drop_string_columns(dataset):
+    first = dataset[0]
+    text_cols = [name for name in dataset.column_names if isinstance(first[name], str)]
+    return dataset.remove_columns(text_cols) if text_cols else dataset
+
+
+def disable_use_cache(model) -> None:
+    modules = model.modules() if hasattr(model, "modules") else [model]
+    for module in [model, *modules]:
+        config = getattr(module, "config", None)
+        if config is not None:
+            config.use_cache = False
+            text_config = getattr(config, "text_config", None)
+            if text_config is not None:
+                text_config.use_cache = False
+        for attr in ("base_model", "model", "language_model"):
+            child = getattr(module, attr, None)
+            if child is not None and child is not module and not hasattr(model, "modules"):
+                disable_use_cache(child)
+
+
 def validate_gpu_visibility(value: str | None) -> None:
     if value is None or not re.fullmatch(r"\d", value):
         raise ValueError("Set CUDA_VISIBLE_DEVICES to exactly one GPU index (0-9) before --preflight, --train, or --resume")
@@ -109,18 +131,31 @@ def main(argv=None):
     print(json.dumps(cfg, ensure_ascii=False, indent=2), flush=True)
     run_output.mkdir(parents=True, exist_ok=True)
     (run_output / "config.json").write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Unsloth must be imported before trl, otherwise SFTTrainer is TRL's unpatched class
+    # (its tokenize path appended <unk> after <turn|> in the G6 preflight).
+    from unsloth import FastVisionModel
+    from unsloth.chat_templates import get_chat_template, train_on_responses_only
     import torch
     from datasets import load_dataset
     from trl import SFTConfig, SFTTrainer
-    from unsloth import FastVisionModel
-    from unsloth.chat_templates import get_chat_template, train_on_responses_only
+    if SFTTrainer.__name__ != "UnslothSFTTrainer":
+        raise RuntimeError(f"SFTTrainer is not Unsloth-patched ({SFTTrainer.__module__})")
 
+    # sdpa, not Unsloth's default flex_attention: flex compiles on first call, and that forward's saved tensors
+    # differ from the checkpoint recompute (CheckpointError, G6 preflight 4-7). sdpa: identical loss/grads to the
+    # KV-cache reference path (G6_grad_probe_sdpa.log). Gemma 4's only softcap is on final logits, not attention.
     model, processor = FastVisionModel.from_pretrained(model_name=cfg["base_model"], max_seq_length=cfg["max_length"],
-        load_in_4bit=True, dtype=None, trust_remote_code=True)
+        load_in_4bit=True, dtype=None, trust_remote_code=True, attn_implementation="sdpa")
+    if model.config._attn_implementation != "sdpa":
+        raise RuntimeError(f"attention implementation is {model.config._attn_implementation}, expected sdpa")
     print("GPU:", torch.cuda.get_device_name(0), flush=True)
     model = FastVisionModel.get_peft_model(model, r=cfg["lora_r"], lora_alpha=cfg["lora_alpha"], lora_dropout=cfg["lora_dropout"],
         bias="none", finetune_vision_layers=False, finetune_language_layers=True,
         finetune_attention_modules=True, finetune_mlp_modules=True, use_gradient_checkpointing="unsloth")
+    # Gemma 4 E4B shares K/V across its last 18 layers. With use_cache=True a real DynamicCache is built and
+    # checkpoint recompute appends to it twice (CheckpointError, G6 preflight 4/5). With use_cache=False,
+    # Unsloth's KV-sharing carrier is used instead; G6 grad probe: loss and LoRA grads identical to the cache path.
+    disable_use_cache(model)
     tokenizer = get_chat_template(processor.tokenizer, chat_template="gemma-4")
     # G4 rows carry a literal BOS. Keep it and disable automatic BOS insertion.
     if hasattr(tokenizer, "add_bos_token"):
@@ -148,8 +183,17 @@ def main(argv=None):
             load_best_model_at_end=cfg.get("load_best_model_at_end", False), optim=cfg["optimizer"], lr_scheduler_type=cfg["scheduler"], warmup_steps=cfg["warmup_steps"],
             weight_decay=cfg["weight_decay"], logging_steps=cfg["logging_steps"], eos_token="<turn|>",
             bf16=torch.cuda.is_bf16_supported(), fp16=not torch.cuda.is_bf16_supported(),
-            gradient_checkpointing=True, report_to="none", remove_unused_columns=False))
+            gradient_checkpointing=True, gradient_checkpointing_kwargs={"use_reentrant": False},
+            report_to="none", remove_unused_columns=False))
+    print("pre-mask columns:", trainer.train_dataset.column_names, "ids tail:", trainer.train_dataset[0]["input_ids"][-5:],
+          "collator:", type(trainer.data_collator).__name__, flush=True)
     trainer = train_on_responses_only(trainer, instruction_part="<|turn>user\n", response_part="<|turn>model\n")
+    print("post-mask ids tail:", trainer.train_dataset[0]["input_ids"][-5:], "labels tail:", trainer.train_dataset[0]["labels"][-5:],
+          "collator:", type(trainer.data_collator).__name__, flush=True)
+    # remove_unused_columns=False keeps the raw "text" column, which the collator cannot tensorize.
+    trainer.train_dataset = drop_string_columns(trainer.train_dataset)
+    trainer.eval_dataset = drop_string_columns(trainer.eval_dataset)
+    print("train columns:", trainer.train_dataset.column_names, flush=True)
     trainable = [(name, p.numel()) for name, p in trainer.model.named_parameters() if p.requires_grad]
     trainable_count = sum(count for _, count in trainable)
     forbidden_trainable = [name for name, _ in trainable if any(x in name.lower() for x in ("vision", "audio", "embed_"))]
@@ -180,10 +224,39 @@ def main(argv=None):
         print("trainable parameters:", trainable_count, flush=True)
         trainer.args.max_steps = 5
         trainer.args.logging_steps = 1
+        seen_cache_args = []
+        text_models = [m for m in trainer.model.modules() if type(m).__name__ == "Gemma4TextModel"]
+        def record_cache_args(module, args_, kwargs):
+            seen_cache_args.append((kwargs.get("use_cache"), module.config.use_cache, type(kwargs.get("past_key_values")).__name__))
+        hooks = [m.register_forward_pre_hook(record_cache_args, with_kwargs=True) for m in text_models]
+        try:
+            trainer.train()
+        finally:
+            for hook in hooks:
+                hook.remove()
+            print("text model cache args (kwarg, config, past_key_values):", sorted(set(map(str, seen_cache_args))), flush=True)
+        losses = [row["loss"] for row in trainer.state.log_history if "loss" in row]
+        print("step losses:", losses, flush=True)
+        if not losses or not all(math.isfinite(x) for x in losses):
+            raise AssertionError(f"Preflight losses not finite: {losses}")
+        train_peak = torch.cuda.max_memory_allocated()
+        print("5-step peak_cuda_memory_gb:", round(train_peak / 2**30, 2), flush=True)
+        # Worst case for memory, through trainer.train() (checkpointing is only active inside train()):
+        # 2 optimizer steps on the 8 longest training rows.
+        lengths = [len(ids) for ids in trainer.train_dataset["input_ids"]]
+        longest = sorted(range(len(lengths)), key=lambda i: lengths[i])[-8:]
+        trainer.train_dataset = trainer.train_dataset.select(longest)
+        trainer.args.max_steps = 2
+        torch.cuda.reset_peak_memory_stats()
         trainer.train()
-        for row in trainer.state.log_history:
-            if "loss" in row:
-                print("step loss:", row.get("step"), row["loss"], flush=True)
+        peak = torch.cuda.max_memory_allocated()
+        total = torch.cuda.get_device_properties(0).total_memory
+        print("longest rows tokens:", sorted(lengths[i] for i in longest), "peak_cuda_memory_gb:", round(peak / 2**30, 2),
+              "of", round(total / 2**30, 2), flush=True)
+        (run_output / "memory.json").write_text(json.dumps({"five_step_peak_bytes": train_peak, "longest_rows_peak_bytes": peak,
+            "longest_row_tokens": max(lengths), "device_total_bytes": total}, indent=2), encoding="utf-8")
+        if peak > 0.9 * total:
+            raise AssertionError(f"Peak memory {peak} exceeds 90% of device memory {total}")
         return
     if args.resume:
         from transformers.trainer_utils import get_last_checkpoint

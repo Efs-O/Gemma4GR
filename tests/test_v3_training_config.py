@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from training.run_v3 import (ROOT, preflight_output_dir, prepare_row, read_config,
+from training.run_v3 import (ROOT, disable_use_cache, drop_string_columns, preflight_output_dir, prepare_row, read_config,
                              response_labels, strip_one_bos, validate_gpu_visibility)
 
 
@@ -82,6 +82,22 @@ class TrainingConfigTests(unittest.TestCase):
             path.write_text(json.dumps(cfg), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "Forbidden path"):
                 read_config(path)
+
+
+    def test_drop_string_columns(self):
+        from datasets import Dataset
+        ds = Dataset.from_dict({"text": ["a"], "input_ids": [[2, 5]], "labels": [[-100, 5]]})
+        self.assertEqual(sorted(drop_string_columns(ds).column_names), ["input_ids", "labels"])
+
+    def test_disable_use_cache_reaches_nested_text_config(self):
+        from types import SimpleNamespace as NS
+        text = NS(use_cache=True)
+        inner = NS(config=NS(use_cache=True, text_config=text))
+        model = NS(config=NS(use_cache=True), base_model=NS(model=inner))
+        disable_use_cache(model)
+        self.assertFalse(model.config.use_cache)
+        self.assertFalse(inner.config.use_cache)
+        self.assertFalse(text.use_cache)
 
 
 if __name__ == "__main__":
