@@ -187,7 +187,19 @@ def main(argv=None):
             # (non-reentrant, as Unsloth's Gemma 4 shared-KV patch requires). Off: 21 GB peak on the longest row;
             # on: 12.9 GB with identical losses (G6 mem_probe4 / preflight 10).
             gradient_checkpointing=True, gradient_checkpointing_kwargs={"use_reentrant": False},
-            report_to="none", remove_unused_columns=False))
+            per_device_eval_batch_size=1, report_to="none", remove_unused_columns=False))
+    # G6 run 1 slowed from ~4.5 to ~60 s/step after the first eval: the eval forward grew the cached pool to the whole
+    # card and Windows spilled VRAM to system RAM. Release the cache after every eval/save.
+    from transformers import TrainerCallback
+
+    class ReleaseCudaCache(TrainerCallback):
+        def _release(self, *args, **kwargs):
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
+        on_evaluate = on_save = _release
+
+    trainer.add_callback(ReleaseCudaCache())
     print("pre-mask columns:", trainer.train_dataset.column_names, "ids tail:", trainer.train_dataset[0]["input_ids"][-5:],
           "collator:", type(trainer.data_collator).__name__, flush=True)
     trainer = train_on_responses_only(trainer, instruction_part="<|turn>user\n", response_part="<|turn>model\n")
@@ -268,6 +280,9 @@ def main(argv=None):
             raise ValueError("--resume requested but no checkpoint exists under output/v3")
     else:
         checkpoint = None
+    # Cap the caching allocator below the card so a full pool frees its cache and retries (or fails loudly)
+    # instead of spilling into system RAM.
+    torch.cuda.set_per_process_memory_fraction(0.94, 0)
     trainer.train(resume_from_checkpoint=checkpoint)
     trainer.model.save_pretrained(output / "lora_adapter")
     processor.save_pretrained(output / "lora_adapter")
