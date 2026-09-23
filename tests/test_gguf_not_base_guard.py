@@ -106,6 +106,21 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(verify_gguf(path, self.base, [self.adapter1, self.adapter2])["verdict"], "PASS")
         self.assertEqual(verify_gguf(path, self.base, [self.adapter1])["verdict"], "FAIL")
 
+    def test_zero_delta_modules_are_not_probed(self):
+        # Gemma 4 KV-shared layers: k/v_proj LoRA gets no gradient, so B stays zero.
+        zeroed = []
+        for op in ("k_proj", "v_proj"):
+            prefix = f"base_model.model.model.language_model.layers.30.self_attn.{op}"
+            self.ad1[prefix + ".lora_B.weight"] = np.zeros((32, 2), dtype=np.float32)
+            self.delta1[prefix] = np.zeros((32, 32), dtype=np.float32)
+            zeroed.append(self._mapping[prefix][1])
+        save_file(self.ad1, str(self.adapter1 / "adapter_model.safetensors"))
+        report = verify_gguf(self._write_gguf(self.root / "kvshared.gguf", tuned=1), self.base, [self.adapter1])
+        self.assertEqual(report["verdict"], "PASS")
+        self.assertFalse({p["name"] for p in report["probes"]} & set(zeroed))
+        base = self._write_gguf(self.root / "kvshared-base.gguf")
+        self.assertEqual(verify_gguf(base, self.base, [self.adapter1])["verdict"], "FAIL")
+
     def test_same_quant_base_bytes_fail(self):
         qtype = gguf.GGMLQuantizationType.Q8_0
         base = self._write_gguf(self.root / "qbase.gguf", quant=qtype)

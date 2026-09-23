@@ -68,3 +68,24 @@ class ParsingAndAudioTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SummaryTests(unittest.TestCase):
+    def test_every_variant_is_paired_with_its_stock_quant(self):
+        from unittest.mock import patch
+
+        def row(case_id, chrf):
+            return {"case_id": case_id, "metrics": {"chrf": chrf, "garbage": False, "length_chars": 3}, "stop_failure": False}
+
+        with tempfile.TemporaryDirectory() as d, patch.object(ev, "OUT", Path(d)):
+            runs = {"stock_Q4_K_M": [0.5, 0.5], "v2fixed_Q4_K_M": [0.5, 0.5], "v3_Q4_K_M": [0.6, 0.4],
+                    "v3qaonly_Q4_K_M": [0.6, 0.6], "stock_Q4_K_M_debug": [0.1, 0.1]}
+            for key, scores in runs.items():
+                (Path(d) / key).mkdir()
+                (Path(d) / key / "text.jsonl").write_text(
+                    "\n".join(json.dumps(row(i, s)) for i, s in enumerate(scores)), encoding="utf-8")
+            ev.summarize()
+            paired = json.loads((Path(d) / "summary.json").read_text(encoding="utf-8"))["paired_chrf_vs_stock"]
+        self.assertEqual(set(paired), {f"{k}_Q4_K_M/text vs stock_Q4_K_M" for k in ("v2fixed", "v3", "v3qaonly")})
+        self.assertEqual(paired["v3_Q4_K_M/text vs stock_Q4_K_M"], {"wins": 1, "ties": 0, "losses": 1})
+        self.assertEqual(paired["v3qaonly_Q4_K_M/text vs stock_Q4_K_M"], {"wins": 2, "ties": 0, "losses": 0})

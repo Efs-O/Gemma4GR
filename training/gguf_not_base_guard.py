@@ -108,6 +108,11 @@ def build_probe_deltas(base_safetensors: Path, adapters: list[Path], min_probes=
         if base.shape != delta.shape:
             raise ExportValidationError(f"base/delta shape mismatch for {prefix}: {base.shape} vs {delta.shape}")
         rel = float(np.linalg.norm(delta.ravel()) / max(np.linalg.norm(base.ravel()), 1e-30))
+        if rel == 0.0:
+            # All-zero delta (e.g. k/v_proj on Gemma 4 KV-shared layers, which get no
+            # gradient): merged == base there, so it cannot tell the two apart.
+            del base, delta
+            continue
         candidates.append({"prefix": prefix, "name": ggname, "base_key": base_key,
                            "relative_delta_norm": rel,
                            "layer": int(layer.group(1)) if layer else -1,

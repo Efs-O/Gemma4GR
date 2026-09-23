@@ -18,6 +18,12 @@ step then copied untuned weights out under a tuned name. Every merge summary on
 disk records `gguf_exported: false` from this. See
 GGUF_EXPORT_FALLBACK_INVESTIGATION.md.
 
+MERGE_METHOD=tensor (the default since v3) skips steps 1-2 and merges the LoRA
+deltas straight into the base safetensors on the CPU (training/merge_lora_tensors.py).
+The Unsloth path loads the fp16 model onto one GPU; E4B (~16 GB) does not fit on
+a 16 GB card, so accelerate offloads weights to meta/CPU and the merge is unsound.
+MERGE_METHOD=unsloth keeps the old path for cards that hold the whole model.
+
 Export now costs disk (an fp16 HF copy + an f16 GGUF, ~15 GB each for E4B)
 rather than RAM. That trade is deliberate: correctness over peak memory.
 """
@@ -98,6 +104,7 @@ MAX_SEQ_LEN        = int(os.getenv("QA_TRAIN_MAX_SEQ_LEN", "4096"))
 EXPORT_GGUF        = os.getenv("MERGE_ADAPTERS_EXPORT_GGUF", "1").strip() == "1"
 MERGE_SKIP_STT     = os.getenv("MERGE_SKIP_STT", "0").strip().lower() in ("1", "true", "yes")
 MERGE_SKIP_QA      = os.getenv("MERGE_SKIP_QA", "0").strip().lower() in ("1", "true", "yes")
+MERGE_METHOD       = os.getenv("MERGE_METHOD", "tensor").strip().lower()
 GGUF_QUANT_METHODS = [
     s.strip()
     for s in os.getenv("MERGE_ADAPTERS_GGUF_QUANT", "q4_k_m,q8_0").split(",")
@@ -304,7 +311,7 @@ def apply_qa_adapter(model, qa_adapter_path: Path):
     return merged
 
 
-def export_gguf(model, processor, tokenizer) -> tuple[bool, list[str], str | None, dict | None]:
+def export_gguf(model, processor, tokenizer, materialize=None) -> tuple[bool, list[str], str | None, dict | None]:
     """Save the merged model to disk, then convert THAT with llama.cpp.
 
     Never hand the merged model to Unsloth's save_pretrained_gguf — see the
@@ -340,11 +347,14 @@ def export_gguf(model, processor, tokenizer) -> tuple[bool, list[str], str | Non
         # because apply_qa_adapter() strips accelerate's offload hooks before the
         # PEFT merge. The model sits entirely on one device, so the multi-device
         # check is moot — drop the attribute so hasattr() is False and it skips.
-        if getattr(model, "hf_device_map", "absent") is None:
-            del model.hf_device_map
-        model.save_pretrained(str(merged_hf_stage), safe_serialization=True)
-        tokenizer.save_pretrained(str(merged_hf_stage))
-        processor.save_pretrained(str(merged_hf_stage))
+        if materialize is not None:
+            materialize(merged_hf_stage)
+        else:
+            if getattr(model, "hf_device_map", "absent") is None:
+                del model.hf_device_map
+            model.save_pretrained(str(merged_hf_stage), safe_serialization=True)
+            tokenizer.save_pretrained(str(merged_hf_stage))
+            processor.save_pretrained(str(merged_hf_stage))
         shards = sorted(merged_hf_stage.glob("*.safetensors"))
         if not shards:
             raise RuntimeError(
@@ -375,7 +385,10 @@ def export_gguf(model, processor, tokenizer) -> tuple[bool, list[str], str | Non
         mmproj_name = f"{stem}-mmproj.gguf"
         run_step(
             [sys.executable, LLAMA_CONVERT, merged_hf_stage,
-             "--outfile", gguf_stage / mmproj_name, "--mmproj", "--model-name", GGUF_MODEL_NAME],
+             # Explicit f16: without --outtype the converter keeps the source dtype
+             # (bf16 for a tensor merge), which is not byte-identical to the stock F16 projector.
+             "--outfile", gguf_stage / mmproj_name, "--outtype", "f16", "--mmproj",
+             "--model-name", GGUF_MODEL_NAME],
             "convert mmproj",
         )
 
@@ -405,7 +418,11 @@ def export_gguf(model, processor, tokenizer) -> tuple[bool, list[str], str | Non
             "created_at": datetime.now(timezone.utc).isoformat(),
             "model": _MODEL,
             "general_name": GGUF_MODEL_NAME,
-            "base_model_name_or_path": str(getattr(model.config, "_name_or_path", "")),
+            "base_model_name_or_path": (
+                str(BASE_SAFETENSORS.parent) if model is None
+                else str(getattr(model.config, "_name_or_path", ""))
+            ),
+            "merge_method": MERGE_METHOD,
             "active_adapters": active_adapters,
             "merged_hf_shards": [
                 file_record(path, relative_to=merged_hf_stage) for path in shards
@@ -448,6 +465,38 @@ def export_gguf(model, processor, tokenizer) -> tuple[bool, list[str], str | Non
 # entry point
 # ---------------------------------------------------------------------------
 
+def merge_tensor(summary: dict, status: dict) -> int:
+    """CPU tensor-level merge of the active adapters into the base safetensors."""
+    from training.merge_lora_tensors import merge_to_dir
+
+    if BASE_SAFETENSORS is None:
+        raise ExportValidationError("MERGE_METHOD=tensor needs MERGE_BASE_SAFETENSORS")
+    adapters = []
+    if status["stt_adapter"] and not MERGE_SKIP_STT:
+        adapters.append(STT_ADAPTER)
+    if status["qa_adapter"] and not MERGE_SKIP_QA:
+        adapters.append(QA_ADAPTER)
+    if not adapters:
+        raise ExportValidationError("no active adapters to merge")
+    print(f"\n[1-2/3] Tensor merge on CPU: {BASE_SAFETENSORS.parent} + {[str(a) for a in adapters]}")
+
+    def materialize(out_dir: Path) -> None:
+        report = merge_to_dir(BASE_SAFETENSORS.parent, adapters, out_dir)
+        summary["tensor_merge"] = report
+        print(f"    {report}")
+
+    print("\n[3/3] Exporting GGUF ...")
+    gguf_ok, gguf_files, gguf_err, manifest = export_gguf(None, None, None, materialize)
+    summary["merge_completed"] = gguf_ok
+    summary["gguf_exported"] = gguf_ok
+    summary["gguf_files"] = gguf_files
+    summary["gguf_error"] = gguf_err
+    summary["publication_completed"] = gguf_ok
+    summary["export_manifest"] = str(GGUF_DIR / "export_manifest.json") if manifest is not None else None
+    print("  Merge complete" if gguf_ok else f"  MERGE FAILED — {gguf_err}")
+    return 0 if gguf_ok else 1
+
+
 def merge() -> int:
     summary: dict = {
         "stt_adapter_found": STT_ADAPTER.exists(),
@@ -466,6 +515,11 @@ def merge() -> int:
 
     try:
         status = check_prerequisites_final()
+        summary["merge_method"] = MERGE_METHOD
+        if MERGE_METHOD == "tensor":
+            return merge_tensor(summary, status)
+        if MERGE_METHOD != "unsloth":
+            raise ValueError(f"MERGE_METHOD must be 'tensor' or 'unsloth', got {MERGE_METHOD!r}")
         from unsloth import FastModel, FastVisionModel
 
         # Step 1: load base + STT adapter (Unsloth native — handles ClippableLinear)

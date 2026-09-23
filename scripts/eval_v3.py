@@ -238,8 +238,10 @@ def summarize():
         allruns[f"{key[0]}/{key[1]}"] = {"count": len(rows), "metrics": cols, "stop_failures": sum(bool(r["stop_failure"]) for r in rows), "mean_length_chars": statistics.mean(r["metrics"]["length_chars"] for r in rows)}
     paired = {}
     for (run_key, set_name), rows in rawruns.items():
-        quant = run_key.removeprefix("v2fixed_").removeprefix("stock_")
         if run_key.startswith("stock_"): continue
+        match = re.match(r"(v2fixed|v3qaonly|v3)_(.+)$", run_key)
+        if match is None: continue
+        quant = match.group(2)
         baseline = rawruns.get((f"stock_{quant}", set_name))
         if baseline is None: continue
         left = {str(r["case_id"]): r for r in baseline}

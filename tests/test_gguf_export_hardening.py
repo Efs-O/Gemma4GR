@@ -218,6 +218,7 @@ class MergeSummaryTests(unittest.TestCase):
             )
             with patch.dict(sys.modules, {"unsloth": fake_unsloth}), patch.multiple(
                 merge_module,
+                MERGE_METHOD="unsloth",
                 MERGE_SKIP_STT=True,
                 MERGE_SKIP_QA=False,
                 QA_ADAPTER=qa_adapter,
