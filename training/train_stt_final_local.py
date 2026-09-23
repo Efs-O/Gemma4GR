@@ -19,7 +19,7 @@ BASE = Path(__file__).parent.parent
 if str(BASE) not in sys.path:
     sys.path.insert(0, str(BASE))
 
-from env_bootstrap import ensure_unsloth_runtime, normalize_hf_model_path, resolve_hf_snapshot
+from env_bootstrap import ensure_unsloth_runtime, resolve_training_model_source
 
 ensure_unsloth_runtime(BASE)
 
@@ -159,15 +159,7 @@ class MemoryMetricsLogger:
 
 
 def resolve_model_source() -> str:
-    if MODEL_PATH_OVERRIDE:
-        normalized = normalize_hf_model_path(MODEL_PATH_OVERRIDE)
-        if normalized:
-            return normalized
-    cache_folder = "models--" + MODEL_NAME.replace("/", "--")
-    snapshot = resolve_hf_snapshot(cache_folder)
-    if snapshot:
-        return snapshot
-    return MODEL_NAME
+    return resolve_training_model_source(MODEL_NAME, MODEL_PATH_OVERRIDE)
 
 
 def load_unsloth_model(fast_model_cls):
@@ -179,10 +171,7 @@ def load_unsloth_model(fast_model_cls):
         full_finetuning=False,
         token=HF_TOKEN or None,
     )
-    try:
-        return fast_model_cls.from_pretrained(**common_kwargs)
-    except Exception:
-        return fast_model_cls.from_pretrained(**common_kwargs, local_files_only=True)
+    return fast_model_cls.from_pretrained(**common_kwargs)
 
 
 def check_prerequisites() -> int:

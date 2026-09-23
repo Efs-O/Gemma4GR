@@ -23,7 +23,7 @@ BASE = Path(__file__).parent.parent
 if str(BASE) not in sys.path:
     sys.path.insert(0, str(BASE))
 
-from env_bootstrap import ensure_unsloth_runtime, normalize_hf_model_path, resolve_hf_snapshot
+from env_bootstrap import ensure_unsloth_runtime, resolve_training_model_source
 
 ensure_unsloth_runtime(BASE)
 
@@ -170,17 +170,7 @@ def save_training_metrics(trainer, run_dir: Path, output_dir: Path) -> tuple[Pat
 
 
 def resolve_model_source() -> str:
-    if MODEL_PATH_OVERRIDE:
-        normalized = normalize_hf_model_path(MODEL_PATH_OVERRIDE)
-        if normalized:
-            return normalized
-
-    cache_folder = "models--" + MODEL_NAME.replace("/", "--")
-    snapshot = resolve_hf_snapshot(cache_folder)
-    if snapshot:
-        return snapshot
-
-    return MODEL_NAME
+    return resolve_training_model_source(MODEL_NAME, MODEL_PATH_OVERRIDE)
 
 
 def load_unsloth_model(FastModel):
@@ -193,15 +183,7 @@ def load_unsloth_model(FastModel):
         full_finetuning=False,
         token=HF_TOKEN or None,
     )
-    try:
-        return FastModel.from_pretrained(**common_kwargs)
-    except Exception as exc:
-        print(f"  [WARN] Initial model load failed: {exc}")
-        print("  [INFO] Retrying model load from local Hugging Face cache only...")
-        return FastModel.from_pretrained(
-            **common_kwargs,
-            local_files_only=True,
-        )
+    return FastModel.from_pretrained(**common_kwargs)
 
 
 def warn_if_validation_stale(paths: list[Path], label: str) -> None:

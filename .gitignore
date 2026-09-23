@@ -104,6 +104,29 @@ data/transcripts/
 # Unsloth runtime-generated JIT cache (machine-specific, regenerated on startup)
 unsloth_compiled_cache/
 
+# Gemma4GR v3 private planning and phase artifacts
+private/
+START_HERE_V3.md
+AGENTS.md
+.coordination/
+.mcp.json
+MCP.txt
+FORGE.md
+persona/
+*.bak
+GGUF_EXPORT_FALLBACK_INVESTIGATION.md
+hf_discussion_reply_draft.md
+.agents/
+data/v3/
+output/v3/
+
+# Pending owner decision on shipping the UI
+web/
+web_app.py
+requirements-ui.txt
+gemma4gr_core.py
+docs/
+
 # Human voice recordings (binary, CC BY-NC — kept local, a few samples go to HF model repo)
 data/human_voice_dataset/wavs/
 data/human_voice_dataset/dry_preview/

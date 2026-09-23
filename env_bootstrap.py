@@ -99,6 +99,17 @@ def normalize_hf_model_path(path_value: str) -> str | None:
     return str(path)
 
 
+def resolve_training_model_source(model_name: str, path_override: str = "") -> str:
+    """Resolve one source; an invalid explicit local path is a hard error."""
+    if path_override:
+        normalized = normalize_hf_model_path(path_override)
+        if normalized is None:
+            raise FileNotFoundError(f"Configured model path does not exist or is unusable: {path_override}")
+        return normalized
+    snapshot = resolve_hf_snapshot("models--" + model_name.replace("/", "--"))
+    return snapshot or model_name
+
+
 def _probe_current_python() -> dict[str, object]:
     torch_version = None
     cuda_available = False
@@ -246,6 +257,8 @@ def select_python_for_script(base_dir: Path, script_path: Path) -> tuple[str, st
         "generate_pairs.py",
         "train_e2b_local.py",
         "train_qa_local.py",
+        "train_stt_qa_local.py",
+        "train_stt_final_local.py",
         "merge_adapters.py",
     }
     if script_path.name not in unsloth_scripts:
