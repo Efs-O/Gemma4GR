@@ -125,6 +125,17 @@ python tests/compare_4bit_models_gui.py       # compare base vs fine-tuned
 
 ---
 
+## Repository Layout
+
+| Path | Contents |
+| --- | --- |
+| `training/` | Training, merge, GGUF export and the not-base guard |
+| `scripts/` | v3 dataset build and eval harness (`scripts/legacy/`: v2-era helpers, kept for reference) |
+| `tests/` | Unit tests (`test_*.py`) and the older benchmark tools used by `menu.py` |
+| `docs/` | HF model card, JOY voice card, Piper recording guide (`docs/archive/`: v2-era guides, superseded) |
+
+---
+
 ## Environment
 
 - Python 3.11 · Windows 10

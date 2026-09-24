@@ -125,7 +125,7 @@ web/
 web_app.py
 requirements-ui.txt
 gemma4gr_core.py
-docs/
+docs/internal/
 
 # Human voice recordings (binary, CC BY-NC — kept local, a few samples go to HF model repo)
 data/human_voice_dataset/wavs/

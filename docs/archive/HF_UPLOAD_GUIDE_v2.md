@@ -83,7 +83,7 @@ The model uses the Gemma 4 native template from the Unsloth Apr 11 update:
 
 ```
 Efso/gemma4gr-e4b-greek-stt/
-├── README.md                        ← model card (from HF_README_gemma4gr_e4b_greek_stt.md)
+├── README.md                        ← model card (from HF_README_greek_stt_v2.md)
 ├── gemma4gr-e4b-stt-q4_k_m.gguf   ← main artifact (Git LFS, 5.1 GB)
 ├── gemma4gr-e4b-stt-mmproj.gguf   ← multimodal projector (Git LFS, 944 MB)
 ├── chat_template.jinja
@@ -105,7 +105,7 @@ Efso/gemma4gr-e4b-greek-stt/
 | `gemma4gr-e4b-stt-mmproj.gguf` | Multimodal projector — required for audio input, upload via Git LFS |
 | `chat_template.jinja` | Copy from `tests/templates/gemma4gr_shared_chat_template.jinja` |
 | `Modelfile` | Ollama integration — temperature 0, no system prompt |
-| `README.md` | Model card (from `HF_README_gemma4gr_e4b_greek_stt.md`) |
+| `README.md` | Model card (from `HF_README_greek_stt_v2.md`) |
 | `LICENSE` | CC BY-NC 4.0 full text |
 | `samples/` | 3-5 WAV + transcript pairs from validation set |
 
