@@ -1,9 +1,10 @@
 from __future__ import annotations
-import argparse, hashlib, json, random, re, unicodedata, subprocess
+import argparse, hashlib, json, os, random, re, unicodedata, subprocess
 from functools import lru_cache
 from collections import Counter, defaultdict
 from pathlib import Path
 from tokenizers import Tokenizer
+from huggingface_hub import hf_hub_download
 
 ROOT=Path(__file__).resolve().parents[1]; SEED=3407; MAX=2048
 TOKENS={'km','kg','cm','mm','ml','mg','DNA','UNESCO','Wi-Fi','USB','AI','ΕΕ','ΗΠΑ','ΟΗΕ','ΦΠΑ','BBC','NASA','LED','PDF','GPS','SMS','CPU','URL','°C','%'}
@@ -59,10 +60,10 @@ def flags(u,a,whitelist):
  if not a.strip() or len(a.strip())<15:f.append('empty_or_truncated')
  return f,ratio
 def main():
- ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int,default=SEED);ap.add_argument('--train',default='data/train_qa.jsonl');ap.add_argument('--val',default='data/val_qa.jsonl');ap.add_argument('--combined',default='data/train_qa_combined.jsonl');ap.add_argument('--out',default='data/v3');args=ap.parse_args()
+ ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int,default=SEED);ap.add_argument('--train',default='data/train_qa.jsonl');ap.add_argument('--val',default='data/val_qa.jsonl');ap.add_argument('--combined',default='data/train_qa_combined.jsonl');ap.add_argument('--out',default='data/v3');ap.add_argument('--tokenizer',default=os.environ.get('GEMMA4GR_BASE_TOKENIZER','google/gemma-4-E4B-it'),help='tokenizer.json path or HF repo id of the base model');args=ap.parse_args()
  out=(ROOT/args.out).resolve(); out.mkdir(parents=True,exist_ok=True);(out/'eval').mkdir(exist_ok=True)
  paths={k:(ROOT/v).resolve() for k,v in [('train',args.train),('val',args.val),('combined',args.combined)]}
- tp=Path('N:/.cache/huggingface/hub/gemma-4-E4B-it/tokenizer.json'); tok=Tokenizer.from_file(str(tp)); drops=defaultdict(lambda:defaultdict(list)); mods=Counter(); whitelist=Counter({t:0 for t in TOKENS}); mid=[]; stats={}
+ tp=Path(args.tokenizer) if Path(args.tokenizer).is_file() else Path(hf_hub_download(args.tokenizer,'tokenizer.json')); tok=Tokenizer.from_file(str(tp)); drops=defaultdict(lambda:defaultdict(list)); mods=Counter(); whitelist=Counter({t:0 for t in TOKENS}); mid=[]; stats={}
  def process(src,path):
   allr=[]
   for i,line in enumerate(read(path),1):

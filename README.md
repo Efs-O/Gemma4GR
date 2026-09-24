@@ -4,21 +4,26 @@ Fine-tuning Google Gemma 4 for Greek speech understanding and language generatio
 
 > **Hackathon submission:** [Google Gemma 4 Good Hackathon (Kaggle, May 2026)](https://www.kaggle.com/competitions/google-gemma-4-good-hackathon)
 
+> **⚠️ Correction (2026-09-24).** The v2 GGUFs released in May 2026 (Hugging Face and Ollama) were exported incorrectly and contained the **unmodified base model** `google/gemma-4-E4B-it`. The LoRA adapters were fine; the export step silently fell back to the base weights. The v2 evaluation numbers (+29% overall, +67% audio) compared the base model with itself and are **withdrawn**. **v3** is the first build with the fine-tune actually merged, verified tensor by tensor. The measured results are below.
+
 ---
 
 ## Model
 
-**[Efso/gemma-4-E4B-it-GR-v2](https://huggingface.co/Efso/gemma-4-E4B-it-GR-v2)** — Gemma 4 E4B fine-tuned for:
-1. **Greek STT** — understands spoken Modern Greek across 17 voice categories (3,217 human recordings + JOY synthetic speech)
-2. **Greek Text Q&A** — fluent, culturally accurate Greek prose across 10 topic categories (2,476 curated pairs)
+**[Efso/gemma-4-E4B-it-GR-v2](https://huggingface.co/Efso/gemma-4-E4B-it-GR-v2)** (v3 files; the repo name is kept from v2): Gemma 4 E4B with a Greek Q&A LoRA adapter merged in, trained on ~2,200 curated Greek question–answer pairs, for cleaner and more natural Modern Greek.
 
-Both adapters merged into a single GGUF, ready for Ollama or llama.cpp.
+The v3 release contains **no speech or vision fine-tune**: audio and image input work at stock Gemma 4 E4B level.
 
 | File | Size | Use |
 |------|------|-----|
-| `gemma-4-e4b-it-gr-v2-Q4_K_M.gguf` | 5.0 GB | Primary inference |
-| `gemma-4-e4b-it-gr-v2-Q8_0.gguf` | 7.5 GB | Higher precision |
-| `gemma-4-e4b-it-gr-v2-mmproj.gguf` | 945 MB | Audio/vision projection |
+| `gemma-4-e4b-it-gr-v3-Q4_K_M.gguf` | 5.34 GB | Lightest |
+| `gemma-4-e4b-it-gr-v3-Q6_K.gguf` | 6.22 GB | Middle ground |
+| `gemma-4-e4b-it-gr-v3-Q8_0.gguf` | 8.03 GB | Closest to full precision |
+| `gemma-4-e4b-it-gr-v3-mmproj.gguf` | 0.99 GB | Audio/image input (stock projector) |
+
+Also on Ollama: `ollama run efso/gemma-4-e4b-it-gr-v2` (tags `latest` = `q4_k_m`, `q6_k`, `q8_0`; text only). If you pulled before 2026-09-24, pull again.
+
+**Not a source of facts.** v3 writes fluent, confident Greek but doesn't know more than the base model. Verify anything factual.
 
 ---
 
@@ -26,7 +31,7 @@ Both adapters merged into a single GGUF, ready for Ollama or llama.cpp.
 
 | Output | Description |
 |--------|-------------|
-| **Gemma4GR GGUF** | Gemma 4 E4B fine-tuned for Greek STT + Q&A. Two QLoRA adapters merged via Unsloth. |
+| **Gemma4GR GGUF** | Gemma 4 E4B with a Greek Q&A QLoRA adapter merged in (v3). |
 | **JOY voice** (`el_GR-joy-medium.onnx`) | First high-quality open-source Greek Piper TTS voice, recorded by a native speaker. CC BY-NC 4.0. |
 
 JOY is named after **Χαρά** (Chara — Joy in Greek), who records all voice sessions.
@@ -42,24 +47,25 @@ Phase A — JOY Greek voice (Piper TTS)
   → train_piper.py (local)
   → el_GR-joy-medium.onnx  [HuggingFace: Efso/joy-greek-tts]
 
-Phase 1 — STT adapter
+Phase 1 — STT adapter  (v2 experiment; not included in the v3 release)
   JOY synthetic WAVs + human voice recordings (3,217 WAVs)
   → prepare_stt_final_dataset.py
   → train_stt_final_local.py  (FastVisionModel, QLoRA r=32, 2 epochs)
   → output/e4b_stt_final/lora_adapter
 
 Phase 2 — Q&A adapter
-  generate_qa_pipeline.py (Ollama qwen3.5, 2,476 pairs, 10 categories)
-  → prepare_qa_dataset.py
-  → train_qa_local.py  (FastModel, QLoRA r=32, 2 epochs)
-  → output/e4b_greek_qa/lora_adapter
+  generate_qa_pipeline.py (Ollama qwen3.5, 10 categories)
+  → scripts/build_v3_dataset.py  (dedup + filtering → 2,219 train / 96 val, frozen eval sets)
+  → training/run_v3.py → train_qa_local.py  (QLoRA r=32, response-only loss, 2 epochs)
 
 Phase 3 — Merge + release
-  merge_adapters.py → Unsloth save_pretrained_gguf
-  → gemma-4-e4b-it-gr-v2-Q4_K_M.gguf  [HuggingFace: Efso/gemma-4-E4B-it-GR-v2]
+  merge_lora_tensors.py  (CPU tensor-level merge: W + (α/r)·B·A)
+  → llama.cpp convert_hf_to_gguf + llama-quantize  (Q4_K_M, Q6_K, Q8_0)
+  → gguf_not_base_guard.py  (refuses any GGUF that is still the base model)
+  → gemma-4-e4b-it-gr-v3-*.gguf  [HuggingFace: Efso/gemma-4-E4B-it-GR-v2]
 ```
 
-Full pipeline table: [CLAUDE.md](CLAUDE.md)
+**What went wrong in v2:** `merge_adapters.py` relied on Unsloth's `save_pretrained_gguf`, which silently exported the base snapshot instead of the merged weights. v3 merges at tensor level, converts with llama.cpp directly, and checks every GGUF against the base before release.
 
 ---
 
@@ -85,18 +91,23 @@ Scripts: [`Dockerfile.piper`](Dockerfile.piper) · [`training/setup_piper_source
 
 ---
 
-## Evaluation
+## Evaluation (v3)
 
-Evaluated on 54 curated Greek cases (20 text Q&A + 34 spoken audio):
+Frozen held-out sets, llama.cpp `llama-server`, identical settings for every model (temperature 0, seed 42, same Greek system prompt). Stock = `google/gemma-4-E4B-it` converted and quantized with the same pipeline.
 
-| Metric | Base E4B | Gemma4GR v2 | Δ |
-|--------|----------|-------------|---|
-| Overall pass rate | 35% | 45% | **+29%** |
-| Audio spoken_qa passes | 22% | 37% | **+67%** |
-| Text Q&A passes | 57% | 60% | +4% |
-| Avg token F1 | 0.222 | 0.284 | +28% |
+| Model | Text chrF ↑ | Answers with foreign-script garbage ↓ | Didn't stop (of 150) ↓ | Speech CER ↓ |
+|---|---|---|---|---|
+| stock E4B Q4_K_M | 0.298 | 38.7% | 131 | 0.256 |
+| stock E4B Q8_0 | 0.307 | 40.0% | 119 | 0.135 |
+| **v3 Q4_K_M** | **0.391** | **1.3%** | **0** | 0.138 |
+| **v3 Q6_K** | **0.392** | **0.7%** | 1 | 0.123 |
+| **v3 Q8_0** | **0.391** | **0.7%** | **0** | 0.158 |
 
-Full results: [tests/benchmark_results/](tests/benchmark_results/)
+- **Text:** 150 held-out Greek questions with reference answers (chrF = character-level similarity).
+- **Speech:** 40 held-out Greek clips; v3 is within the noise of stock, as expected with no speech fine-tune.
+- **Factual spot check** (25 answers read by hand): v3 still makes confident factual errors at about the same rate as stock. It fixes the *form* of answers, not their *knowledge*.
+
+Full method and per-quant details: [model card](https://huggingface.co/Efso/gemma-4-E4B-it-GR-v2).
 
 ---
 
@@ -108,7 +119,7 @@ python menu.py              # main TUI
 
 # Standalone
 python training/run_final_local_sequence.py   # full E4B training sequence
-python training/merge_adapters.py             # merge + GGUF export
+python training/merge_adapters.py             # merge + GGUF export (tensor-level, guarded)
 python tests/compare_4bit_models_gui.py       # compare base vs fine-tuned
 ```
 
